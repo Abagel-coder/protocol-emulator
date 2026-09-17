@@ -1,0 +1,14 @@
+name: tools
+on: [push, workflow_dispatch]
+jobs:
+  tools:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.12'}
+      - run: pip install pyyaml pytest==8.4.2
+      - name: Generated files are up to date
+        run: python tools/gen_isa.py --check
+      - name: Tool tests
+        run: pytest -q

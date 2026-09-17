@@ -39,11 +39,16 @@ async def delay_slot_after_jmp(dut):
 async def waitt_no_drift(dut):
     await boot(dut, "SETT R1, 0\nloop:\n ADDT R1, 5\n TGL UO, 0x01\n WAITT R1\n JMP loop\n NOP"); tr = await trace(dut, 60)
     uo = [t[0] & 1 for t in tr]; edges = [i for i in range(1, 60) if uo[i] != uo[i-1]]
-    assert all(b - a == 5 for a, b in zip(edges, edges[1:])), edges
+    # edges[0] is the first toggle after the one-time SETT/ADDT warm-up; "no drift" means
+    # the steady-state period stays exactly 5 for every interval after that first one.
+    assert all(b - a == 5 for a, b in zip(edges[1:], edges[2:])), edges
 
 @cocotb.test()
 async def waitp_timeout_and_release(dut):
-    await boot(dut, "LDI R2, 3\nWAITP UI, 0, HIGH, R2\nBTO 1\nNOP\nSET UO, 0x01\nHALT\nSET UO, 0x02\nHALT\nNOP")
+    # BTO's target is pc+1+simm with one delay slot always executing; BTO is at addr 2,
+    # so simm=3 lands the taken (timeout) branch at addr 2+1+3=6 (SET UO, 0x02), while
+    # fall-through after the delay slot (addr 3) reaches addr 4 (SET UO, 0x01).
+    await boot(dut, "LDI R2, 3\nWAITP UI, 0, HIGH, R2\nBTO 3\nNOP\nSET UO, 0x01\nHALT\nSET UO, 0x02\nHALT\nNOP")
     await trace(dut, 12); assert int(dut.halted.value) == 1 and int(dut.uo_out.value) == 0x02 and (int(dut.flags.value) >> 2) & 1 == 1
     await boot(dut, "WAITP UI, 0, RISE, R0\nSET UO, 0x01\nHALT\nNOP")
     await trace(dut, 5); dut.ui_in.value = 1; tr = await trace(dut, 8)
@@ -51,8 +56,15 @@ async def waitp_timeout_and_release(dut):
 
 @cocotb.test()
 async def alu_flags_and_r0(dut):
+    # MOV is ALU-class and always sets Z from its own result (docs/isa.md), so Z/C from
+    # the ADD must be checked with ADD as the final instruction before HALT, before a
+    # later MOV overwrites them.
+    await boot(dut, "LDI R1, 0xFF\nLDIH R1, 0xFF\nLDI R2, 1\nADD R1, R2\nHALT\nNOP"); await trace(dut, 8)
+    f = int(dut.flags.value)
+    assert int(dut.u_core.regs[1].value) == 0 and f & 1 == 1 and (f >> 1) & 1 == 1
+    # rd=0 writes are discarded: MOV R0, R2 must not change R0.
     await boot(dut, "LDI R1, 0xFF\nLDIH R1, 0xFF\nLDI R2, 1\nADD R1, R2\nMOV R0, R2\nHALT\nNOP"); await trace(dut, 8)
-    f = int(dut.flags.value); assert int(dut.u_core.regs[1].value) == 0 and f & 1 == 1 and (f >> 1) & 1 == 1
+    assert int(dut.u_core.regs[0].value) == 0
 
 @cocotb.test()
 async def call_ret(dut):

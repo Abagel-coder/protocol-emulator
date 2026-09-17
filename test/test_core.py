@@ -79,11 +79,41 @@ async def core_reset_suppresses_side_effects(dut):
     assert tr0[0][0] == 0, tr0                       # SET's write never reached uo_out
     await RisingEdge(dut.clk)                        # synchronous reset lands here
     assert int(dut.pc.value) == 0 and int(dut.halted.value) == 0
+    await FallingEdge(dut.clk)                       # wait for settled values
+    assert int(dut.uo_out.value) == 0
+    assert int(dut.uio_out.value) == 0
+    assert int(dut.uio_oe.value) == 0
+    assert int(dut.active.value) == 0
     dut.core_reset.value = 0
     tr = await trace(dut, 8)
     # program restarts cleanly from pc=0: SET ORs into uo, so both SETs together give 0x03.
     assert 0x03 in [t[0] for t in tr], tr
     assert tr[-1][0] == 0x03 and int(dut.halted.value) == 1
+
+@cocotb.test()
+async def reserved_alu_fn_is_noop(dut):
+    # raw ALU word with fn=12 (reserved) should be a no-op
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    words = [0x1205, (2<<12)|(1<<9)|(1<<6)|(12<<2), 0x1, 0x0]  # LDI R1, 5; reserved ALU fn=12; HALT; NOP
+    load(dut, words); dut.prescale.value = 0; dut.run.value = 0
+    dut.rst_n.value = 0; await ClockCycles(dut.clk, 3); dut.rst_n.value = 1; await ClockCycles(dut.clk, 2)
+    dut.run.value = 1; await RisingEdge(dut.clk)
+    await trace(dut, 8)
+    assert int(dut.u_core.regs[1].value) == 5
+    f = int(dut.flags.value)
+    assert f & 1 == 0, f  # Z=0 from the LDI of 5
+
+@cocotb.test()
+async def pin_bank_field_truthiness(dut):
+    # raw PIN word with bank field = 2 should treat it as UIO (like the oracle)
+    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+    words = [(4<<12)|(0<<10)|(2<<8)|0x10, 0, 0, 0]  # PIN SET with bank=2, mask=0x10; HALT; NOP; NOP
+    load(dut, words); dut.prescale.value = 0; dut.run.value = 0
+    dut.rst_n.value = 0; await ClockCycles(dut.clk, 3); dut.rst_n.value = 1; await ClockCycles(dut.clk, 2)
+    dut.run.value = 1; await RisingEdge(dut.clk)
+    await trace(dut, 4)
+    assert int(dut.uio_out.value) == 0x10
+    assert int(dut.uo_out.value) == 0
 
 @cocotb.test()
 async def call_ret(dut):

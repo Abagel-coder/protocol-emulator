@@ -19,3 +19,4 @@ sim_build/
 __pycache__/
 results.xml
 test/gate_level_netlist.v
+.superpowers/

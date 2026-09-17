@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Two-pass assembler for the protocol-emulator ISA (generated tables in tools/isa_defs.py)."""
 import argparse, re, sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if __name__ == "__main__":
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tools import isa_defs as D
 
 class AsmError(Exception):
@@ -43,17 +44,38 @@ def _parse(text):
 
 def assemble(text):
     lines = _parse(text); equs, labels = {}, {}
-    pc = 0                                                   # pass 1: addresses
+    pc = 0; max_pc = 0                                       # pass 1: addresses
     for n, label, op, args in lines:
-        if label: labels[label] = pc
-        if op == ".EQU": equs[args[0].split()[0]] = int(args[0].split()[1], 0) if len(args) == 1 else int(args[1], 0)
-        elif op == ".ORG": pc = int(args[0], 0)
-        elif op in (".WORD",) or op: pc += 1
+        if label:
+            if label in labels: raise AsmError("line %d: duplicate label %r" % (n, label))
+            labels[label] = pc
+        if op == ".EQU":
+            try:
+                if len(args) == 1:
+                    parts = args[0].split()
+                    if len(parts) < 2: raise AsmError("line %d: .equ requires NAME and VALUE" % n)
+                    equs[parts[0]] = int(parts[1], 0)
+                elif len(args) == 2:
+                    equs[args[0].strip()] = int(args[1].strip(), 0)
+                else:
+                    raise AsmError("line %d: .equ expects NAME VALUE or NAME, VALUE" % n)
+            except (IndexError, ValueError) as e:
+                raise AsmError("line %d: malformed .equ: %s" % (n, e)) from None
+        elif op == ".ORG":
+            new_pc = int(args[0], 0)
+            if new_pc < pc: raise AsmError("line %d: .org 0x%x moves backwards from 0x%x" % (n, new_pc, pc))
+            pc = new_pc
+        elif op not in ("",): pc += 1
+        max_pc = max(max_pc, pc)
     words, pc = {}, 0                                        # pass 2: encode
     for n, label, op, args in lines:
         try:
             if op == ".EQU": continue
-            if op == ".ORG": pc = int(args[0], 0); continue
+            if op == ".ORG":
+                new_pc = int(args[0], 0)
+                if new_pc < pc: raise AsmError(".org 0x%x moves backwards from 0x%x" % (new_pc, pc))
+                pc = new_pc
+                continue
             if op == ".WORD": words[pc] = _num(args[0], equs, labels) & 0xFFFF; pc += 1; continue
             if not op: continue
             if op not in D.MNEMONICS: raise AsmError("unknown mnemonic %s" % op)
@@ -65,6 +87,7 @@ def assemble(text):
                 v = _num(tok, equs, labels)
                 if f in RELATIVE and tok.strip() in labels: v = labels[tok.strip()] - (pc + 1)
                 word = _place(word, f, v, cls)
+            if pc in words: raise AsmError("address 0x%x already used" % pc)
             words[pc] = word; pc += 1
         except AsmError as e:
             raise AsmError("line %d: %s" % (n, e)) from None
@@ -72,13 +95,18 @@ def assemble(text):
     return [words.get(i, 0) for i in range(top)]
 
 def assemble_file(path):
-    return assemble(open(path).read())
+    with open(path) as f:
+        return assemble(f.read())
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("src"); ap.add_argument("-o", "--out")
     a = ap.parse_args(); ws = assemble_file(a.src)
     out = "\n".join("%04x" % w for w in ws) + "\n"
-    (open(a.out, "w").write(out) if a.out else sys.stdout.write(out))
+    if a.out:
+        with open(a.out, "w") as f:
+            f.write(out)
+    else:
+        sys.stdout.write(out)
 
 if __name__ == "__main__":
     main()

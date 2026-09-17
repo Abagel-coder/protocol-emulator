@@ -32,3 +32,31 @@ def test_range_errors():
     with pytest.raises(AsmError): w("LDI R1, 300")
     with pytest.raises(AsmError): w("BZ far\n" + "NOP\n"*300 + "far: NOP")
     with pytest.raises(AsmError): w("FOO R1")
+
+def test_equ_malformed_raises():
+    """Malformed .equ (missing value) must raise AsmError with line number."""
+    with pytest.raises(AsmError): w(".equ NAME")
+    with pytest.raises(AsmError): w(".equ NAME=5")
+
+def test_equ_accepts_both_forms():
+    """Accept both .equ NAME VALUE and .equ NAME, VALUE."""
+    result1 = w(".equ X 10\n.word X")
+    assert result1 == [10]
+    result2 = w(".equ Y, 20\n.word Y")
+    assert result2 == [20]
+
+def test_duplicate_label_raises():
+    """Duplicate label definitions must raise AsmError naming the label and line."""
+    with pytest.raises(AsmError) as exc_info:
+        w("top:\n  NOP\ntop:\n  NOP")
+    assert "top" in str(exc_info.value).lower() or "duplicate" in str(exc_info.value).lower()
+
+def test_org_backwards_raises():
+    """Moving .org backwards (to lower address) must raise AsmError."""
+    with pytest.raises(AsmError):
+        w(".org 10\n  NOP\n.org 5\n  NOP")
+
+def test_org_clobber_raises():
+    """Encoding a word at an address already used must raise AsmError."""
+    with pytest.raises(AsmError):
+        w(".org 0\n  NOP\n.org 0\n  NOP")

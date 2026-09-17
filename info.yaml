@@ -18,7 +18,12 @@ project:
   # Don't forget to also update `PROJECT_SOURCES` in test/Makefile.
   source_files:
     - "project.v"
-    - "uart_tx.v"
+    - "pe_timebase.v"
+    - "pe_gpio.v"
+    - "pe_imem_ff.v"
+    - "pe_fifo.v"
+    - "pe_core.v"
+    - "pe_host_spi.v"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).

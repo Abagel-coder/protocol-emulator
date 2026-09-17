@@ -48,11 +48,10 @@ module pe_core (
   reg        wait_active;
   reg [8:0]  dcnt;
   reg [15:0] wdead;
-  reg        run_q;                    // one-cycle-delayed run: the first active cycle's
-                                        // side effects must land on the edge *after* the one
-                                        // where `run` first goes high, not on that same edge.
+  reg        run_q;                    // `run` delayed one cycle: `active` follows RUN's rise/fall
+                                        // one cycle late (see isa.yaml semantics.run); core_reset is NOT delayed through run_q — it gates `active` directly, same cycle.
 
-  assign active    = run_q && !halted;
+  assign active    = run_q && !halted && !core_reset;
   assign flags_out = {fto, fc, fz};
 
   // ---------------------------------------------------------------- decode
@@ -124,6 +123,7 @@ module pe_core (
   wire [16:0] sum  = {1'b0, rd_v} + {1'b0, rs_v};
   wire [16:0] diff = {1'b0, rd_v} + {1'b0, ~rs_v} + 17'd1;
   wire [16:0] addi = {1'b0, rd_v} + {1'b0, {{7{ir[8]}}, ir[8:0]}};
+  wire        alu_valid = (ir[5:2] <= `ISA_ALU_BITT);  // fn 11-15 are reserved: true no-ops (matches tools/sim.py)
   always @* begin
     alu_y = rs_v; alu_c = fc; alu_wr = 1'b1; alu_setc = 1'b0;
     case (ir[5:2])
@@ -145,7 +145,7 @@ module pe_core (
   // ---- GPIO / host side-effects (single-cycle classes, so adv is implied by active)
   assign gpio_wr_en   = active && (cls == `ISA_CLS_PIN);
   assign gpio_wr_op   = ir[11:10];
-  assign gpio_wr_bank = ir[8];
+  assign gpio_wr_bank = |ir[9:8];
   assign gpio_wr_mask = ir[7:0];
   assign gpio_pin_en   = active && (cls == `ISA_CLS_SETR);
   assign gpio_pin_bank = ir[8];
@@ -169,32 +169,32 @@ module pe_core (
       st0 <= 10'd0; st1 <= 10'd0; st2 <= 10'd0; st3 <= 10'd0; stcnt <= 3'd0; run_q <= 1'b0;
       for (i = 0; i < 8; i = i + 1) regs[i] <= 16'd0;
     end else begin
-    run_q <= run;
-    if (active) begin
-      if (is_halt) halted <= 1'b1;
-      if (adv) begin
-        pc <= next_pc; redir_v <= redirect_new; redir_t <= redirect_tgt; wait_active <= 1'b0;
-        if (is_timed) fto <= !timed_cond;
-        case (cls)
-          `ISA_CLS_LDI:  begin if (f_rd != 3'd0) regs[f_rd] <= ldi_v; fz <= (ldi_v == 16'd0); end
-          `ISA_CLS_ALU:  begin if (alu_wr && f_rd != 3'd0) regs[f_rd] <= alu_y; fz <= (alu_y == 16'd0); if (alu_setc) fc <= alu_c; end
-          `ISA_CLS_ADDI: begin if (f_rd != 3'd0) regs[f_rd] <= addi[15:0]; fz <= (addi[15:0] == 16'd0); fc <= addi[16]; end
-          `ISA_CLS_IN:   begin if (f_rd != 3'd0) regs[f_rd] <= in_v; fz <= (in_v == 16'd0); end
-          `ISA_CLS_TIME: begin if (f_rd != 3'd0) regs[f_rd] <= time_v; end
-          `ISA_CLS_HOST: begin if (ir[8] && f_rd != 3'd0) regs[f_rd] <= h2c_valid ? h2c_data : 16'd0; end
-          `ISA_CLS_JMP:  begin
-            if (ir[11]) begin st0 <= pc + 10'd2; st1 <= st0; st2 <= st1; st3 <= st2; if (stcnt != 3'd4) stcnt <= stcnt + 3'd1; end
-          end
-          `ISA_CLS_MISC: begin
-            if (is_ret && stcnt != 3'd0) begin st0 <= st1; st1 <= st2; st2 <= st3; stcnt <= stcnt - 3'd1; end
-          end
-          default: ;
-        endcase
-      end else if (is_wait) begin
-        if (!wait_active) begin wait_active <= 1'b1; wdead <= dead_now; dcnt <= w_imm9 - 9'd1; end
-        else if (w_sub == `ISA_WAIT_DELAY) dcnt <= dcnt - 9'd1;
+      run_q <= run;
+      if (active) begin
+        if (is_halt) halted <= 1'b1;
+        if (adv) begin
+          pc <= next_pc; redir_v <= redirect_new; redir_t <= redirect_tgt; wait_active <= 1'b0;
+          if (is_timed) fto <= !timed_cond;
+          case (cls)
+            `ISA_CLS_LDI:  begin if (f_rd != 3'd0) regs[f_rd] <= ldi_v; fz <= (ldi_v == 16'd0); end
+            `ISA_CLS_ALU:  begin if (alu_valid) begin if (alu_wr && f_rd != 3'd0) regs[f_rd] <= alu_y; fz <= (alu_y == 16'd0); if (alu_setc) fc <= alu_c; end end
+            `ISA_CLS_ADDI: begin if (f_rd != 3'd0) regs[f_rd] <= addi[15:0]; fz <= (addi[15:0] == 16'd0); fc <= addi[16]; end
+            `ISA_CLS_IN:   begin if (f_rd != 3'd0) regs[f_rd] <= in_v; fz <= (in_v == 16'd0); end
+            `ISA_CLS_TIME: begin if (f_rd != 3'd0) regs[f_rd] <= time_v; end
+            `ISA_CLS_HOST: begin if (ir[8] && f_rd != 3'd0) regs[f_rd] <= h2c_valid ? h2c_data : 16'd0; end
+            `ISA_CLS_JMP:  begin
+              if (ir[11]) begin st0 <= pc + 10'd2; st1 <= st0; st2 <= st1; st3 <= st2; if (stcnt != 3'd4) stcnt <= stcnt + 3'd1; end
+            end
+            `ISA_CLS_MISC: begin
+              if (is_ret && stcnt != 3'd0) begin st0 <= st1; st1 <= st2; st2 <= st3; stcnt <= stcnt - 3'd1; end
+            end
+            default: ;
+          endcase
+        end else if (is_wait) begin
+          if (!wait_active) begin wait_active <= 1'b1; wdead <= dead_now; dcnt <= w_imm9 - 9'd1; end
+          else if (w_sub == `ISA_WAIT_DELAY) dcnt <= dcnt - 9'd1;
+        end
       end
-    end
     end
   end
 endmodule

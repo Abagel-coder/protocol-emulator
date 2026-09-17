@@ -75,3 +75,4 @@
 - **flags.** ADD/SUB/CMP/ADDI set Z and C (C = carry out of the 16-bit add, or 'no borrow' for SUB/CMP). AND/OR/XOR/MOV/LDI/SHL/SHR/ROR set Z only; SHL/SHR/ROR also set C to the bit shifted out. BITT sets Z = ((rd & rs) == 0) and writes nothing.
 - **pins.** SET/CLR/TGL apply mask to the bank's output register. OE bank,mask: bank=1 sets uio_oe bits in mask, bank=0 clears them. SETR bank,pin,rn,bit sets output pin to bit 'bit' of Rn. IN Rd,bank reads the synchronised input bank (2-cycle sampling latency) or an output register.
 - **reset.** PC = 0, all registers 0, flags 0, T = 0, uio_oe = 0, outputs 0, core halted until RUN.
+- **run.** The core samples RUN through one register: it becomes active the cycle after RUN rises (with the first instruction at PC executing in that cycle) and inactive the cycle after RUN falls. core_reset takes effect immediately and suppresses all side effects in its cycle.

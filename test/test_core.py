@@ -41,6 +41,7 @@ async def waitt_no_drift(dut):
     uo = [t[0] & 1 for t in tr]; edges = [i for i in range(1, 60) if uo[i] != uo[i-1]]
     # edges[0] is the first toggle after the one-time SETT/ADDT warm-up; "no drift" means
     # the steady-state period stays exactly 5 for every interval after that first one.
+    assert len(edges) >= 8, edges
     assert all(b - a == 5 for a, b in zip(edges[1:], edges[2:])), edges
 
 @cocotb.test()
@@ -65,6 +66,24 @@ async def alu_flags_and_r0(dut):
     # rd=0 writes are discarded: MOV R0, R2 must not change R0.
     await boot(dut, "LDI R1, 0xFF\nLDIH R1, 0xFF\nLDI R2, 1\nADD R1, R2\nMOV R0, R2\nHALT\nNOP"); await trace(dut, 8)
     assert int(dut.u_core.regs[0].value) == 0
+
+@cocotb.test()
+async def core_reset_suppresses_side_effects(dut):
+    await boot(dut, "SET UO, 0x01\nSET UO, 0x02\nHALT\nNOP")
+    # Pulse core_reset across the cycle in which SET UO, 0x01 (pc=0) would execute:
+    # `active` must drop combinationally this cycle, so the pin write is never applied,
+    # and the synchronous reset (pc/halted/etc back to 0) takes effect on the edge that
+    # ends this cycle, since core_reset is still asserted at that edge.
+    dut.core_reset.value = 1
+    tr0 = await trace(dut, 1)
+    assert tr0[0][0] == 0, tr0                       # SET's write never reached uo_out
+    await RisingEdge(dut.clk)                        # synchronous reset lands here
+    assert int(dut.pc.value) == 0 and int(dut.halted.value) == 0
+    dut.core_reset.value = 0
+    tr = await trace(dut, 8)
+    # program restarts cleanly from pc=0: SET ORs into uo, so both SETs together give 0x03.
+    assert 0x03 in [t[0] for t in tr], tr
+    assert tr[-1][0] == 0x03 and int(dut.halted.value) == 1
 
 @cocotb.test()
 async def call_ret(dut):

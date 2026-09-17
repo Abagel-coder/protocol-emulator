@@ -41,10 +41,26 @@ Everything below was read from primary sources on 2026-09-15. Re-verify dates an
 - Local hardening guide: https://tinytapeout.com/guides/local-hardening/ (Python ≥3.11, Docker running, macOS: `brew install libpng qhull cairo`, `PDK=ihp-...`, `pip install librelane==$LIBRELANE_TAG`, `./tt/tt_tool.py --ihp --create-user-config` then `--harden`).
 - Specs: clock https://tinytapeout.com/specs/clock/ (RP2040-generated, 1 Hz–66.5 MHz, ≤10 ns insertion delay); GPIO https://tinytapeout.com/specs/gpio/ (26 pins per project; ~66 MHz in / ~33 MHz out documented for sky130 pads; ~20 ns worst-case mux latency; 3.3 V, not 5 V tolerant); memory https://tinytapeout.com/specs/memory/ (≈320 DFF per tile; latch RAM 64 B/tile; IHP SRAM options 1024x8, 512x32, 1024x32 single-port; dual-port 1024x16/1024x32); pinouts https://tinytapeout.com/specs/pinouts/ (UART to USB: `ui_in[3]` RX / `uo_out[4]` TX; Pmod SPI on `uio[0..3]`; I2C `uio[2]` SCL / `uio[3]` SDA).
 - SRAM example: https://github.com/urish/ttihp-sram-test (sg13g2, 2x2 tiles). Macro `RM_IHPSG13_1P_1024x8_c2_bm_bist`, LEF size 146.88 × 336.46 µm; config needs `MACROS` block, `PDN_MACRO_CONNECTIONS`, custom `pdn_cfg.tcl` (Metal4↔TopMetal1), `MAGIC_MACRO_STD_CELL_SOURCE: PDK`, `ERROR_ON_MAGIC_DRC: false`, `MAGIC_EXT_ABSTRACT_CELLS`. Behavioural model in `test/models/`. In the CMOS5L PDK, `libs.ref/sg13cmos5l_sram` is a symlink to `../../ihp-sg13g2/libs.ref/sg13g2_sram`, so the same macros are what is offered.
+- **SRAM-on-CMOS5L trial (2026-09-15, local LibreLane 3.1.0.dev3):** the urish example synthesises and floorplans on cmos5l but fails at `OpenROAD.GeneratePDN` with `[PDN-0003] Layers must be different in connect rule: Metal4`. Cause: CMOS5L's stack is Metal1–Metal4 + TopMetal1 (no Metal5/TopMetal2) and the PDK's LibreLane config puts the vertical PDN stripes on **Metal4**, the same layer as the macro's `VDD!/VDDARRAY!/VSS!` pins, so the example's `add_pdn_connect Metal4↔$PDN_VERTICAL_LAYER` collapses to Metal4↔Metal4. The fix is to make the Metal4 stripes physically overlap the macro's Metal4 power columns (PRISM's `odb_stripes.py` + `librelane_plugin_prism_pdn.py` do exactly this) or to add TopMetal1 straps over the macro and connect Metal4↔TopMetal1. Scheduled for the instruction-memory decision (week 2); fallback is flip-flop instruction memory. PRISM's recipe (https://github.com/kdp1965/ihp-um-janestreet-prism, files `librelane_plugin_prism_pdn.py` and `odb_stripes.py`): a LibreLane plugin step inserted after `OpenROAD.GeneratePDN` via `meta.substituting_steps` that redraws each macro's VPWR/VGND Metal4 pin columns as full-height tile stripes, with the tile grid aligned to the SRAM's power-column pitch (`FP_PDN_VPITCH` 44.96, `FP_PDN_VOFFSET` 6.15, `FP_PDN_VWIDTH` 2.1, `FP_PDN_VSPACING` 3.52, macro halos 2.0/0.48, `ERROR_ON_PDN_VIOLATIONS` 0); it also patches a netgen LVS JSON escape bug for the SRAM's `VDD!` pin names. Check its license before reusing code; the approach itself is reproducible from the docstrings.
 - PDK repos: https://github.com/IHP-GmbH/IHP-Open-PDK (branch `dev` has `ihp-sg13cmos5l/libs.ref/{sg13cmos5l_io, sg13cmos5l_sram, sg13cmos5l_stdcell}`), https://github.com/IHP-GmbH/ihp-sg13cmos5l (standalone copy).
 - FPGA: https://tinytapeout.com/guides/fpga-breakout/ (iCE40 UP5K breakout, pin-compatible with the demo board; `tt_fpga.py harden` / `configure --upload`; bitstreams selected from the RP2040 SDK). Kit: https://store.tinytapeout.com/products/FPGA-Development-Kit-p813805747 (€90, two PCBs, preliminary firmware needs an update on arrival).
 - FAQ: https://tinytapeout.com/faq/ (≈1000 gates per tile; chips take 6–9 months plus assembly; demo board + breakout arrive assembled).
 - Discord: https://tinytapeout.com/discord
+
+## Measured cell areas (local Yosys/ABC mapping to sg13cmos5l_stdcell, 2026-09-15)
+
+From the warm-up UART TX synthesis (tt_um top with the 8N1 transmitter): 184 cells, 2541.9 µm² total, of which 1175.7 µm² (46 %) in 24 `sg13cmos5l_dfrbpq_1` flip-flops.
+
+| Cell | Area (µm²) | Note |
+|---|---|---|
+| `dfrbpq_1` (DFF with reset, Q) | ~49.0 | 24 cells = 1175.7 µm² |
+| `nand2_1` / `nor2_1` | ~7.26 | |
+| `inv_1` | ~5.44 | |
+| `a21oi_1` | ~9.07 | |
+| `tiehi` / `tielo` | ~7.26 | |
+| average over this netlist | ~13.8 | |
+
+Implications for the budget: one 1x1 tile (31,318 µm²) holds roughly 640 flip-flops at 100 % or ~380 at the default 60 % placement density; a 64 × 16-bit flip-flop instruction memory is ~1024 flops ≈ 50,000 µm² before muxing, i.e. about the same silicon as one 1 KB SRAM macro (49,419 µm²) that stores eight times as many bits. At ~13.8 µm² per average cell the 6x4 block (916,214 µm²) holds ~40K cells at 60 % density, above the blog's "~1K cells per tile" rule of thumb, which is therefore conservative.
 
 ## Tools (versions seen on 2026-09-15)
 

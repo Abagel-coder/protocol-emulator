@@ -16,7 +16,13 @@ An open-source programmable protocol-emulator CPU for IHP 130 nm SG13CMOS5L via 
 |---|---|
 | 2026-09-15 | Repo scaffolded from the `cmos5l` template; fixed 8N1 UART transmitter (`src/uart_tx.v`) with cycle-exact cocotb tests (3/3 passing locally on Icarus) as the warm-up block; local toolchain installed and verified |
 
-Results table (cells, utilisation, worst slack, protocols demonstrated) will be filled from the first hardening run.
+## Results
+
+| Date | Design | Tiles | Std cells (logic / repair+clock) | Std-cell area | Utilisation | Setup WS @ 50 MHz (slow corner) | Hold WS | Route DRC | Notes |
+|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-15 | warm-up UART TX | 6x4 | 252 (184 / 68) | 3,507 µm² | 0.39 % of 902,417 µm² core | +13.34 ns | +0.128 ns | 0 (after 3 iterations), 0 antenna | Local LibreLane 3.1.0.dev3 on cmos5l; GDS written; run stopped at the final Magic LEF step by a Docker Desktop file-sharing stall (see PLAN.md risks) |
+
+Measured library data from this run: a reset flip-flop (`sg13cmos5l_dfrbpq_1`) is ~49 µm²; the average cell in this netlist is ~13.8 µm². Details and budget implications in [docs/research/competition-brief.md](docs/research/competition-brief.md).
 
 ## Layout
 

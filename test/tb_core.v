@@ -11,11 +11,18 @@ module tb_core;
   reg  h2c_push = 0; reg [15:0] h2c_wdata = 0; wire h2c_pop, h2c_valid, h2c_full; wire [15:0] h2c_rdata;
   wire c2h_push, c2h_valid, c2h_full; wire [15:0] c2h_data, c2h_rdata; reg c2h_pop = 0;
   wire [9:0] pc; wire halted, active, adv; wire [2:0] flags;
-  // Timebase enable mirrors pe_core's internal run_q exactly (registered `run`, cleared by
-  // reset or core_reset): tying en to raw `run` would tick T one cycle too early, since T
-  // must read 0 in the cycle where run_q first makes the core active (the cycle address 0
-  // executes). Unlike gating from `active`, this keeps T free-running through HALT, matching
-  // tools/sim.py's Sim.step(), which ticks T unconditionally every cycle regardless of halted.
+  // NOTE: this gating is a TEST-HARNESS-ONLY alignment trick, not chip behaviour. On the
+  // real chip (src/project.v) the timebase free-runs from reset (`.en(1'b1)`): T's absolute
+  // value when a program starts is unspecified (isa.yaml semantics.timebase), and firmware
+  // must never assume T == 0. tools/sim.py's oracle models that by taking a `t0` starting
+  // value (default 0) instead of hardcoding T = 0. This testbench exists to check cycle-exact
+  // pin traces against that oracle at its default t0 = 0, so it needs T to actually read 0 in
+  // the harness's cycle 0 -- hence gating the timebase off run_q_tb (a local mirror of
+  // pe_core's internal run_q, which pe_core doesn't expose as a port) instead of tying en to
+  // raw `run`: tying en to raw `run` would tick T one cycle too early, since T must read 0 in
+  // the cycle where run_q first makes the core active (the cycle address 0 executes). Unlike
+  // gating from `active`, this keeps T free-running through HALT, matching tools/sim.py's
+  // Sim.step(), which ticks T unconditionally every cycle regardless of halted.
   reg run_q_tb = 1'b0;
   always @(posedge clk) run_q_tb <= (!rst_n || core_reset) ? 1'b0 : run;
   pe_timebase u_tb (.clk(clk), .rst_n(rst_n), .en(run_q_tb), .prescale(prescale), .t_out(t_out), .tick(tick));

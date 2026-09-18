@@ -4,6 +4,12 @@ One call to step() is one clock cycle. The instruction at self.pc executes durin
 cycle; registered outputs (uo, uio_out, uio_oe) change at the end of the cycle. Waits
 re-execute the same instruction every cycle until they complete. There is one branch
 delay slot. This model is the oracle for test/test_diff.py, so keep it simple and literal.
+
+T is a free-running counter (isa.yaml semantics.timebase): it starts at reset, not at RUN,
+and its absolute value when a program starts is unspecified on real hardware. Sim's `t0`
+constructor argument lets callers start T at an arbitrary value (default 0, matching the
+test harness's alignment choice -- see test/tb_core.v) to check that firmware timing logic
+doesn't depend on T's absolute value, only on differences taken via SETT/ADDT.
 """
 from collections import deque
 from tools import isa_defs as D
@@ -17,11 +23,11 @@ def _s(v, bits):
     return v - (1 << bits) if v & (1 << (bits - 1)) else v
 
 class Sim:
-    def __init__(self, words, prescale=1, imem_words=64):
+    def __init__(self, words, prescale=1, imem_words=64, t0=0):
         self.imem = [0] * imem_words
         for i, w in enumerate(words): self.imem[i] = w & MASK16
         self.prescale = prescale; self.presc_cnt = 0
-        self.pc = 0; self.next_pc = 1; self.regs = [0] * 8; self.T = 0
+        self.pc = 0; self.next_pc = 1; self.regs = [0] * 8; self.T = t0 & MASK16
         self.flags = {"Z": 0, "C": 0, "TO": 0}; self.stack = []
         self.uo = 0; self.uio_out = 0; self.uio_oe = 0; self.ui = 0; self.uio_in = 0
         self.prev_ui = 0; self.prev_uio_in = 0
@@ -64,7 +70,11 @@ class Sim:
 
     # ---- one cycle -----------------------------------------------------------
     def step(self):
-        trace = (self.cycle, self.uo, self.uio_out, self.uio_oe)
+        # halted is captured here (before this cycle's instruction executes), so a HALT
+        # decoded during this cycle only shows up in the trace starting next cycle -- the
+        # same one-cycle-later visibility as the registered pin outputs, matching pe_core.v's
+        # `halted <= 1'b1` (registered the cycle after HALT decodes).
+        trace = (self.cycle, self.uo, self.uio_out, self.uio_oe, self.halted)
         if not self.halted:
             self._execute(self.imem[self.pc % len(self.imem)])
         for fn in self.pending: fn()

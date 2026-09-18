@@ -121,6 +121,30 @@ async def call_ret(dut):
     assert int(dut.halted.value) == 1 and tr[-1][0] == 0x03, tr
 
 @cocotb.test()
+async def waitt_period_holds_across_T_wraparound(dut):
+    # T free-runs from reset and never pauses (isa.yaml semantics.timebase); it is unrelated
+    # to when a program starts, so a firmware timing loop must not glitch when T wraps past
+    # 0xFFFF back to 0. This harness starts T at 0 (see the run_q_tb comment in tb_core.v), so
+    # run long enough at prescale 0 (tick every cycle) to force a real wrap within the run:
+    # ~65536 cycles to wrap once, plus margin.
+    await boot(dut, "SETT R1, 0\nloop:\n ADDT R1, 5\n TGL UO, 0x01\n WAITT R1\n JMP loop\n NOP", prescale=0)
+    N = 66000
+    uo = []; t = []
+    for _ in range(N):
+        await FallingEdge(dut.clk)
+        uo.append(int(dut.uo_out.value) & 1); t.append(int(dut.t_out.value))
+    # Bit-exact wraparound arithmetic: T must increment by exactly 1 every single cycle
+    # (prescale=0, en stable after boot), wrapping 0xFFFF -> 0x0000 without a glitch, and the
+    # 66000-cycle run must span exactly one such wrap.
+    assert all(t[i] == (t[i - 1] + 1) & 0xFFFF for i in range(1, N)), "T did not increment by exactly 1 every cycle"
+    wraps = [i for i in range(1, N) if t[i] < t[i - 1]]
+    assert len(wraps) == 1, wraps   # confirms the run truly spans (exactly) one wrap
+    edges = [i for i in range(1, N) if uo[i] != uo[i - 1]]
+    periods = [b - a for a, b in zip(edges[1:], edges[2:])]
+    assert len(periods) > 65536 // 5, len(periods)   # confirms the run truly spans the wrap
+    assert all(p == 5 for p in periods), (periods[:5], periods[-5:])
+
+@cocotb.test()
 async def host_fifo_push_pop(dut):
     await boot(dut, "WAITF RXV, R0\nPOP R1\nPUSH R1\nHALT\nNOP")
     await trace(dut, 3); dut.h2c_wdata.value = 0xBEEF; dut.h2c_push.value = 1; await RisingEdge(dut.clk); dut.h2c_push.value = 0

@@ -76,9 +76,35 @@ def test_setr_uo_pin7_is_reserved_noop():
     # writes a single bit directly and needs its own guard, matching pe_gpio.v's
     # `pin_idx != 3'd7` guard. tools/sim.py's SETR used to let bit 7 leak into self.uo
     # (found by test_diff.py's fuzzer: program 75, cycle 1210, uo=132 instead of 4).
+    #
+    # A trailing SET UO, 0x04 always re-masks uo to 7 bits on its own (PIN's own apply() ANDs
+    # with 0x7F), so checking only the final uo value or the final trace entry passes even
+    # with the `elif pin != 7` guard reverted -- that check is vacuous. The leak is visible
+    # only at trace index 2 (the value of uo as of the *start* of the SET cycle, i.e. right
+    # after SETR's pending write lands and before SET's write applies): 0x00 with the guard,
+    # 0x80 without it. Assert the whole trace so this regression actually fails without the
+    # fix (verified: reverting the guard makes this FAIL with tr == [0, 0, 128, 4, 4, 4]).
     s = Sim(assemble("LDI R1, 1\nSETR UO, 7, R1, 0\nSET UO, 0x04\nHALT\nNOP"))
     tr = s.run(6)
-    assert s.uo == 0x04 and tr[-1][1] == 0x04   # bit 7 never set; uo stays a 7-bit value
+    assert [t[1] for t in tr] == [0, 0, 0, 4, 4, 4]
+    assert s.uo == 0x04 and s.halted
+
+def test_timebase_t0_wraparound_preserves_waitt_period():
+    # T is a free-running counter that starts at reset, not at RUN, and never pauses; a
+    # program can start with T at any value, not just 0 (isa.yaml semantics.timebase). The
+    # steady-state period of a SETT/ADDT/WAITT loop must be the same regardless of T's
+    # starting value, including when T wraps past 0xFFFF back to 0 mid-loop.
+    src = "SETT R1, 0\nloop:\n ADDT R1, 5\n TGL UO, 0x01\n WAITT R1\n JMP loop\n NOP"
+    def periods(t0):
+        s = Sim(assemble(src), t0=t0); tr = s.run(60)
+        uo = [t[1] & 1 for t in tr]
+        edges = [i for i in range(1, 60) if uo[i] != uo[i - 1]]
+        return [b - a for a, b in zip(edges[1:], edges[2:])]
+    p0 = periods(0)
+    p_wrap = periods(0xFFF0)          # T runs 0xFFF0..0xFFF0+59, wrapping past 0xFFFF partway through
+    assert len(p0) >= 8 and all(p == 5 for p in p0)
+    assert len(p_wrap) >= 8 and all(p == 5 for p in p_wrap)
+    assert p0 == p_wrap
 
 def test_uart_tx_firmware_bit_timing():
     s = Sim(assemble(open("firmware/uart_tx.s").read()), prescale=2); tr = s.run(11 * 434 + 20)

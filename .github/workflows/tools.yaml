@@ -12,3 +12,9 @@ jobs:
         run: python tools/gen_isa.py --check
       - name: Tool tests
         run: pytest -q
+  formal:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: YosysHQ/setup-oss-cad-suite@v3
+      - run: cd formal && sby -f core.sby

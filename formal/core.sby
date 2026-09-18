@@ -1,0 +1,31 @@
+[tasks]
+bmc
+prove
+cover
+
+[options]
+bmc: mode bmc
+bmc: depth 20
+prove: mode prove
+prove: depth 8
+cover: mode cover
+cover: depth 20
+timeout 420
+
+[engines]
+smtbmc boolector
+
+[script]
+read_verilog -formal -I. isa_defs.vh
+read_verilog -formal -I. pe_timebase.v
+read_verilog -formal -I. pe_gpio.v
+read_verilog -formal -I. pe_core.v
+read_verilog -formal core_props.v
+prep -top core_props
+
+[files]
+../src/isa_defs.vh
+../src/pe_timebase.v
+../src/pe_gpio.v
+../src/pe_core.v
+core_props.v

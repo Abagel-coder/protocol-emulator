@@ -58,4 +58,28 @@ module pe_gpio (
       end
     end
   end
+
+`ifdef FORMAL
+  // SymbiYosys property. See formal/README.md and formal/core.sby.
+  reg f_past_valid = 1'b0;
+  always @(posedge clk) f_past_valid <= 1'b1;
+
+  reg f_oe_seen = 1'b0;
+  always @(posedge clk) begin
+    if (!rst_n) f_oe_seen <= 1'b0;
+    else if (wr_en && wr_op == `ISA_PIN_OE) f_oe_seen <= 1'b1;
+  end
+  // T3_reset_safety: uio_oe == 0 from reset until the first executed OE pin
+  // instruction -- no bidirectional pin drives before firmware says so.
+  // Gated by f_past_valid: uio_oe has no Verilog initializer, so its value at
+  // the very first (pre-clock-edge) instant is formally unconstrained until
+  // the synchronous reset has actually latched it once, exactly like real
+  // flip-flops -- the same reasoning behind every other f_past_valid guard.
+  always @(posedge clk) if (f_past_valid && !f_oe_seen) assert(uio_oe == 8'd0);
+
+  // cover: an OE execution actually sets uio_oe away from all-zero, so the
+  // property above is not vacuously true because uio_oe never gets driven.
+  always @(posedge clk)
+    if (f_past_valid) cover(f_oe_seen && uio_oe != 8'd0);
+`endif
 endmodule

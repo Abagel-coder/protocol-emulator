@@ -197,4 +197,92 @@ module pe_core (
       end
     end
   end
+
+`ifdef FORMAL
+  // ---------------------------------------------------------------- formal
+  // SymbiYosys properties. See formal/README.md for the write-up and
+  // formal/core.sby / formal/core_props.v for the proof setup (free
+  // instruction stream / inputs, reset asserted in cycle 0 only).
+  reg f_past_valid = 1'b0;
+  always @(posedge clk) f_past_valid <= 1'b1;
+
+  always @(posedge clk) if (f_past_valid && rst_n && !core_reset) begin
+    // T1_deadline_exact: whenever the core is active on a WAITT instruction,
+    // adv == (t_in == rt_v) -- it releases in exactly the cycle T == Rn,
+    // never earlier or later.
+    if (active && is_wait && w_sub == `ISA_WAIT_WAITT)
+      assert(adv == (t_in == rt_v));
+
+    // T2_static_timing (part a): whenever active and the instruction is
+    // neither a WAIT nor HALT, adv is 1 (it completes in the cycle it is
+    // active; no unadvertised multi-cycle stalls outside the WAIT class).
+    if (active && !is_wait && !is_halt)
+      assert(adv);
+  end
+
+  // T2_static_timing (part b): whenever adv was 1 in the previous cycle (and
+  // no reset intervened), pc equals the previous cycle's next_pc.
+  always @(posedge clk)
+    if (f_past_valid && $past(rst_n) && !$past(core_reset) && $past(adv))
+      assert(pc == $past(next_pc));
+
+  // T4_bounded_wait, structural half 1: once wait_active is set for a wait
+  // that does not complete this cycle, its latched deadline wdead is held
+  // constant (it never drifts) until the wait completes.
+  always @(posedge clk)
+    if (f_past_valid && $past(rst_n) && !$past(core_reset) &&
+        $past(wait_active) && !$past(adv))
+      assert(wdead == $past(wdead));
+
+  // T4_bounded_wait, structural half 2: a timed wait (WAITP/WAITF/WAITL)
+  // completes (adv) in any cycle where T has reached its latched deadline
+  // (t_in == wdead) -- the timeout can never be missed once reached.
+  always @(posedge clk)
+    if (active && is_wait && is_timed && wait_active && (t_in == wdead))
+      assert(adv);
+
+  // T5_side_effects_only_when_active: the host/GPIO side-effect strobes this
+  // module drives are all low whenever active is low (halted, RUN low, or
+  // the core_reset cycle itself).
+  //
+  // T5a (re-specification lemma, added after mutation testing -- see
+  // formal/README.md "Mutation testing"): gpio_wr_en/gpio_pin_en/h2c_pop/
+  // c2h_push are all defined as `active && ...`, so T5b below is
+  // structurally a tautology and insensitive to a bug in active's own
+  // definition (e.g. a dropped !core_reset term) -- it would still pass
+  // even if active silently stopped excluding core_reset. T5a closes that
+  // gap by independently re-deriving active's intended formula (the ISA's
+  // semantics.run contract: RUN delayed one cycle, gated by halted and
+  // core_reset) and asserting the RTL's `active` wire matches it.
+  always @(posedge clk)
+    assert(active == (run_q && !halted && !core_reset));
+
+  // T5b: the side-effect strobes are low whenever active is low.
+  always @(posedge clk)
+    if (f_past_valid && !active)
+      assert(!gpio_wr_en && !gpio_pin_en && !h2c_pop && !c2h_push);
+
+  // ---- cover: demonstrate the proofs above are not vacuously true.
+  // A WAITT that actually stalls (wait_active held, adv low for at least one
+  // cycle) and then releases (adv fires) on its deadline cycle.
+  always @(posedge clk)
+    if (f_past_valid)
+      cover($past(active) && $past(is_wait) && ($past(w_sub) == `ISA_WAIT_WAITT) &&
+            $past(wait_active) && !$past(adv) && active && adv);
+
+  // A timed wait (WAITP/WAITF/WAITL) that completes via timeout (timed_to),
+  // not because its condition/flag became true (!timed_cond).
+  always @(posedge clk)
+    cover(active && is_wait && is_timed && wait_active && adv && timed_to && !timed_cond);
+
+  // A taken branch/jump/return/pin-branch/flag-branch is immediately
+  // followed by the execution of its delay-slot instruction.
+  always @(posedge clk)
+    if (f_past_valid)
+      cover($past(active) && $past(adv) && $past(redirect_new) && active && adv);
+
+  // An OE (output-enable) pin instruction actually executes.
+  always @(posedge clk)
+    cover(gpio_wr_en && gpio_wr_op == `ISA_PIN_OE);
+`endif
 endmodule

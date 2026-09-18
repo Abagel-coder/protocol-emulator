@@ -11,7 +11,14 @@ module tb_core;
   reg  h2c_push = 0; reg [15:0] h2c_wdata = 0; wire h2c_pop, h2c_valid, h2c_full; wire [15:0] h2c_rdata;
   wire c2h_push, c2h_valid, c2h_full; wire [15:0] c2h_data, c2h_rdata; reg c2h_pop = 0;
   wire [9:0] pc; wire halted, active, adv; wire [2:0] flags;
-  pe_timebase u_tb (.clk(clk), .rst_n(rst_n), .en(1'b1), .prescale(prescale), .t_out(t_out), .tick(tick));
+  // Timebase enable mirrors pe_core's internal run_q exactly (registered `run`, cleared by
+  // reset or core_reset): tying en to raw `run` would tick T one cycle too early, since T
+  // must read 0 in the cycle where run_q first makes the core active (the cycle address 0
+  // executes). Unlike gating from `active`, this keeps T free-running through HALT, matching
+  // tools/sim.py's Sim.step(), which ticks T unconditionally every cycle regardless of halted.
+  reg run_q_tb = 1'b0;
+  always @(posedge clk) run_q_tb <= (!rst_n || core_reset) ? 1'b0 : run;
+  pe_timebase u_tb (.clk(clk), .rst_n(rst_n), .en(run_q_tb), .prescale(prescale), .t_out(t_out), .tick(tick));
   pe_gpio u_gpio (.clk(clk), .rst_n(rst_n), .ui_in(ui_in), .uio_in(uio_in), .ui_sync(ui_sync), .uio_sync(uio_sync),
                   .ui_prev(ui_prev), .uio_prev(uio_prev), .wr_en(wr_en), .wr_op(wr_op), .wr_bank(wr_bank), .wr_mask(wr_mask),
                   .pin_en(pin_en), .pin_bank(pin_bank), .pin_idx(pin_idx), .pin_val(pin_val),

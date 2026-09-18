@@ -45,7 +45,8 @@ class Sim:
         return ((self.prev_uio_in if bank else self.prev_ui) >> pin) & 1
 
     def _flag(self, fid):
-        return {0: 1 if self.host_to_core else 0, 1: 1 if len(self.core_to_host) < 4 else 0, 2: self.flags["TO"]}[fid]
+        # fid 0/1/2 = RXV/TXE/TO; reserved ids (3+) always read as 0 (see isa.yaml semantics.flag_ids).
+        return {0: 1 if self.host_to_core else 0, 1: 1 if len(self.core_to_host) < 4 else 0, 2: self.flags["TO"]}.get(fid, 0)
 
     def _setz(self, v): self.flags["Z"] = 1 if (v & MASK16) == 0 else 0
 
@@ -125,7 +126,11 @@ class Sim:
             lvl = (self.regs[rn] >> bit) & 1
             def apply():
                 if bank: self.uio_out = (self.uio_out & ~(1 << pin) & 0xFF) | (lvl << pin)
-                else: self.uo = (self.uo & ~(1 << pin) & 0x7F) | (lvl << pin)
+                # uo pin 7 is reserved (routed to the host SPI MISO line, see docs/info.md /
+                # isa.yaml semantics.pins): matches pe_gpio.v's `pin_idx != 3'd7` guard. PIN
+                # SET/CLR/TGL never hit this because uo is masked to 7 bits on every write;
+                # SETR needs the same guard since it targets a single bit directly.
+                elif pin != 7: self.uo = (self.uo & ~(1 << pin) & 0x7F) | (lvl << pin)
             self.pending.append(apply); self._advance(); return
         if cls == C["IN"]:
             rd, bank = _f(w, "IN", "rd"), _f(w, "IN", "bank"); v = self._in_bank(bank)
@@ -159,7 +164,9 @@ class Sim:
             self._write(rd, base + imm); self._advance(); return
         if cls == C["BR"]:
             cond, off = _f(w, "BR", "cond"), _s(_f(w, "BR", "simm9"), 9); B = D.BR_COND; Z, Cf, TO = self.flags["Z"], self.flags["C"], self.flags["TO"]
-            take = {B["BZ"]: Z, B["BNZ"]: not Z, B["BC"]: Cf, B["BNC"]: not Cf, B["BTO"]: TO, B["BNTO"]: not TO}[cond]
+            # cond 6/7 are reserved (3-bit field, 6 mnemonics defined): never taken, matching
+            # pe_core.v's br_take default (isa.yaml semantics.branches).
+            take = {B["BZ"]: Z, B["BNZ"]: not Z, B["BC"]: Cf, B["BNC"]: not Cf, B["BTO"]: TO, B["BNTO"]: not TO}.get(cond, False)
             self._advance((self.pc + 1 + off) & 0x3FF if take else None); return
         if cls == C["JMP"]:
             call, tgt = _f(w, "JMP", "call"), _f(w, "JMP", "target")

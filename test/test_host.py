@@ -117,18 +117,20 @@ async def write_imem_survives_bidx_saturation(dut):
     words = [0] * 128                          # all NOP except word 127
     words[127] = tgl_word                      # word 127 -> IMEM addr 63 (127 mod 64), same slot as word 63 (left as NOP)
     await fast.xfer(encode_write_imem(0, words))
+    assert int(dut.uo_out.value) & 1 == 0, "uo[0] must start low (no TGL has executed yet)"
     await spi.xfer(encode_write_ctrl(run=True))
-    # PC free-runs through the (wrapped) 64-word IMEM at one NOP/cycle, so watch for it reaching
-    # 63 and sample the toggle right after -- before PC wraps back around to 63 (as PC==127) and
-    # re-executes the same TGL, which would toggle the pin back and mask a correct result.
+    # PC free-runs through the (wrapped) 64-word IMEM at one NOP/cycle, executing TGL only when it
+    # reaches address 63 (first at absolute PC 63, again at PC 127, ...). Watch the real output pin
+    # for its first rising edge rather than reading pe_core's internal pc: a chip-pin observation
+    # holds identically in RTL and gate-level sim, where internal hierarchical signal names like
+    # `user_project.pc` do not survive synthesis. The first edge lands well inside the 64-cycle
+    # window before the next TGL at PC 127 would toggle the pin back and mask a correct result.
     for _ in range(400):
         await RisingEdge(dut.clk)
-        if int(dut.user_project.pc.value) == 63:
+        if int(dut.uo_out.value) & 1 == 1:
             break
     else:
-        assert False, "core never reached PC 63"
-    await ClockCycles(dut.clk, 2)
-    assert int(dut.uo_out.value) & 1 == 1, "word 127 (sent after bidx=0xFF saturation) never reached IMEM address 63"
+        assert False, "word 127 (sent after bidx=0xFF saturation) never reached IMEM address 63"
 
 @cocotb.test()
 async def h2c_fifo_full_reported_and_protected(dut):

@@ -1,15 +1,18 @@
 `default_nettype none
 // Supplementary proof for T4_bounded_wait's "counting part" (see
-// formal/README.md). With `en` forced to 1 and `prescale` fixed to an
-// arbitrary-but-constant value ((* anyconst *)), proves that pe_timebase's
-// internal prescale counter never exceeds `prescale` (so `tick` is
-// periodic, at most every prescale+1 cycles -- it can never stall forever)
-// and that `t_out` (T) never skips a value (it only ever holds or advances
-// by exactly 1 per cycle). Combined with pe_core's T4 structural lemmas
-// (wdead is held constant while a timed wait is outstanding, and the wait
-// completes in any cycle where t_in == wdead), this gives: a timed wait
-// started at T0 with deadline wdead = T0 + timeout must complete within one
-// 16-bit wrap of T, i.e. at most 65536 ticks.
+// formal/README.md). Folded into formal/core.sby as the timebase_bmc /
+// timebase_prove tasks (a single .sby file, different top module/engine per
+// task via task tags -- see core.sby's [tasks]/[script]/[files] "tb" tag).
+// With `en` forced to 1 and `prescale` fixed to an arbitrary-but-constant
+// value ((* anyconst *)), proves that pe_timebase's internal prescale
+// counter never exceeds `prescale` (so `tick` is periodic, at most every
+// prescale+1 cycles -- it can never stall forever) and that `t_out` (T)
+// never skips a value (it only ever holds or advances by exactly 1 per
+// cycle). Combined with pe_core's T4 structural lemmas (wdead is held
+// constant while a timed wait is outstanding, and the wait completes in any
+// cycle where t_in == wdead), this gives: a timed wait started at T0 with
+// deadline wdead = T0 + timeout must complete within one 16-bit wrap of T,
+// i.e. at most 65536 ticks.
 module timebase_props (input wire clk);
   reg rst_n = 1'b0;
   always @(posedge clk) rst_n <= 1'b1;

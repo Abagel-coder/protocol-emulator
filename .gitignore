@@ -21,11 +21,10 @@ results.xml
 test/gate_level_netlist.v
 .superpowers/
 
-# SymbiYosys output directories (formal/*.sby task run dirs + status dbs)
-formal/core_bmc/
-formal/core_prove/
-formal/core_cover/
+# SymbiYosys output directories (formal/*.sby task run dirs + status dbs;
+# pattern-based since task names/workdir prefixes can change -- see
+# formal/core.sby's [tasks])
+formal/core_*/
+formal/timebase_*/
 formal/core/
-formal/timebase_bmc/
-formal/timebase_prove/
 formal/timebase/

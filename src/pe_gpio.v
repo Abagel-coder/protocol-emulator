@@ -64,22 +64,47 @@ module pe_gpio (
   reg f_past_valid = 1'b0;
   always @(posedge clk) f_past_valid <= 1'b1;
 
-  reg f_oe_seen = 1'b0;
+  // T3_reset_safety, grant mask: f_oe_granted accumulates every bit ever
+  // granted by an executed OE-*set* write (wr_en && wr_op==ISA_PIN_OE &&
+  // wr_bank -- wr_bank==1 means "set" for the OE class, see the port
+  // comment above), cleared only on reset. uio_oe may only ever have bits
+  // set that have actually been granted this way. A one-shot "has any OE
+  // write ever happened" flag (the original formulation) does not catch an
+  // OE write that sets uio_oe wider than its own wr_mask, or an OE-clear
+  // write that leaves bits on -- see formal/README.md "Mutation testing"
+  // for the mutant this replacement is specifically for.
+  reg [7:0] f_oe_granted;
   always @(posedge clk) begin
-    if (!rst_n) f_oe_seen <= 1'b0;
-    else if (wr_en && wr_op == `ISA_PIN_OE) f_oe_seen <= 1'b1;
+    if (!rst_n) f_oe_granted <= 8'd0;
+    else if (wr_en && wr_op == `ISA_PIN_OE && wr_bank) f_oe_granted <= f_oe_granted | wr_mask;
   end
-  // T3_reset_safety: uio_oe == 0 from reset until the first executed OE pin
-  // instruction -- no bidirectional pin drives before firmware says so.
-  // Gated by f_past_valid: uio_oe has no Verilog initializer, so its value at
-  // the very first (pre-clock-edge) instant is formally unconstrained until
-  // the synchronous reset has actually latched it once, exactly like real
-  // flip-flops -- the same reasoning behind every other f_past_valid guard.
-  always @(posedge clk) if (f_past_valid && !f_oe_seen) assert(uio_oe == 8'd0);
+  // Gated by f_past_valid: uio_oe (and f_oe_granted) have no Verilog
+  // initializer, so their value at the very first (pre-clock-edge) instant
+  // is formally unconstrained until the synchronous reset has actually
+  // latched it once, exactly like real flip-flops -- the same reasoning
+  // behind every other f_past_valid guard in this proof.
+  always @(posedge clk) if (f_past_valid) assert((uio_oe & ~f_oe_granted) == 8'd0);
 
-  // cover: an OE execution actually sets uio_oe away from all-zero, so the
-  // property above is not vacuously true because uio_oe never gets driven.
+  // T3b/T3c (spec-pinning restatements, kept for the same reason T1/T5a are
+  // -- see formal/README.md): the exact next-state of uio_oe following an
+  // executed OE write. An OE-clear write with mask m leaves those bits 0 the
+  // next cycle (T3b); an OE-set write with mask m leaves them 1 the next
+  // cycle (T3c). Together these pin pe_gpio's own
+  // `uio_oe <= wr_bank ? (uio_oe | wr_mask) : (uio_oe & ~wr_mask);` line.
   always @(posedge clk)
-    if (f_past_valid) cover(f_oe_seen && uio_oe != 8'd0);
+    if (f_past_valid && $past(rst_n) && $past(wr_en) && $past(wr_op) == `ISA_PIN_OE && !$past(wr_bank))
+      assert((uio_oe & $past(wr_mask)) == 8'd0);
+  always @(posedge clk)
+    if (f_past_valid && $past(rst_n) && $past(wr_en) && $past(wr_op) == `ISA_PIN_OE && $past(wr_bank))
+      assert((uio_oe & $past(wr_mask)) == $past(wr_mask));
+
+  // cover: gated on rst_n && $past(rst_n)/f_past_valid so it cannot be
+  // witnessed by pre-reset uninitialised-flop state. A post-reset executed
+  // OE-set write is immediately followed by uio_oe reading back exactly the
+  // accumulated grant mask -- not more, not less -- so the properties above
+  // are not vacuously true because uio_oe never actually gets driven.
+  always @(posedge clk)
+    if (f_past_valid && rst_n && $past(rst_n) && $past(wr_en) && $past(wr_op) == `ISA_PIN_OE && $past(wr_bank))
+      cover(uio_oe == f_oe_granted);
 `endif
 endmodule

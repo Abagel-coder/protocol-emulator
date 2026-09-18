@@ -200,16 +200,19 @@ module pe_core (
 
 `ifdef FORMAL
   // ---------------------------------------------------------------- formal
-  // SymbiYosys properties. See formal/README.md for the write-up and
-  // formal/core.sby / formal/core_props.v for the proof setup (free
-  // instruction stream / inputs, reset asserted in cycle 0 only).
+  // SymbiYosys properties. See formal/README.md for the write-up (including
+  // which properties are independent facts over time vs. spec-pinning
+  // restatements of a single RTL line, and why the restatements are kept
+  // anyway) and formal/core.sby / formal/core_props.v for the proof setup
+  // (free instruction stream / inputs, reset asserted in cycle 0 only).
   reg f_past_valid = 1'b0;
   always @(posedge clk) f_past_valid <= 1'b1;
 
-  always @(posedge clk) if (f_past_valid && rst_n && !core_reset) begin
+  always @(posedge clk) if (f_past_valid && rst_n) begin
     // T1_deadline_exact: whenever the core is active on a WAITT instruction,
     // adv == (t_in == rt_v) -- it releases in exactly the cycle T == Rn,
-    // never earlier or later.
+    // never earlier or later. (No separate !core_reset conjunct is needed
+    // on this outer guard: `active`, used inside, already implies it.)
     if (active && is_wait && w_sub == `ISA_WAIT_WAITT)
       assert(adv == (t_in == rt_v));
 
@@ -220,15 +223,31 @@ module pe_core (
       assert(adv);
   end
 
-  // T2_static_timing (part b): whenever adv was 1 in the previous cycle (and
-  // no reset intervened), pc equals the previous cycle's next_pc.
+  // T1b (spec-pinning restatement of a single wire's continuous assignment,
+  // kept for the same reason T5a is -- see formal/README.md): rt_v
+  // really is the selected source register w_rt, reading 0 for r0 like
+  // every other *_v decode wire, so a bug in the source-register select
+  // feeding T1's rt_v is covered by *some* property, not just assumed away.
   always @(posedge clk)
-    if (f_past_valid && $past(rst_n) && !$past(core_reset) && $past(adv))
+    assert(rt_v == ((w_rt == 3'd0) ? 16'd0 : regs[w_rt]));
+
+  // T2_static_timing (part b): whenever adv was 1 in the previous cycle, pc
+  // now equals the previous cycle's next_pc. (No separate
+  // !$past(core_reset) conjunct is needed: $past(adv) already implies
+  // $past(active), which implies !$past(core_reset).)
+  always @(posedge clk)
+    if (f_past_valid && $past(rst_n) && $past(adv))
       assert(pc == $past(next_pc));
 
   // T4_bounded_wait, structural half 1: once wait_active is set for a wait
   // that does not complete this cycle, its latched deadline wdead is held
-  // constant (it never drifts) until the wait completes.
+  // constant (it never drifts) until the wait completes. Unlike T1/T2b
+  // above, !$past(core_reset) here is NOT redundant: $past(wait_active)
+  // reflects a register value latched *before* the previous cycle, so it
+  // does not by itself rule out core_reset having been asserted *during*
+  // the previous cycle (which would force wdead to 0 on this edge
+  // regardless of wait_active's stale value) -- the conjunct is required to
+  // exclude exactly that case.
   always @(posedge clk)
     if (f_past_valid && $past(rst_n) && !$past(core_reset) &&
         $past(wait_active) && !$past(adv))
@@ -245,44 +264,125 @@ module pe_core (
   // module drives are all low whenever active is low (halted, RUN low, or
   // the core_reset cycle itself).
   //
-  // T5a (re-specification lemma, added after mutation testing -- see
-  // formal/README.md "Mutation testing"): gpio_wr_en/gpio_pin_en/h2c_pop/
-  // c2h_push are all defined as `active && ...`, so T5b below is
-  // structurally a tautology and insensitive to a bug in active's own
-  // definition (e.g. a dropped !core_reset term) -- it would still pass
-  // even if active silently stopped excluding core_reset. T5a closes that
-  // gap by independently re-deriving active's intended formula (the ISA's
-  // semantics.run contract: RUN delayed one cycle, gated by halted and
-  // core_reset) and asserting the RTL's `active` wire matches it.
+  // T5a (spec-pinning restatement, NOT an independent check on run_q/halted/
+  // core_reset's own correctness -- see formal/README.md "what is pinned vs.
+  // independent"): this assertion is definitionally identical to the RTL's
+  // own `assign active = run_q && !halted && !core_reset;` line above. It
+  // pins that one continuous-assignment line word-for-word, so it catches
+  // an edit to *this* line's operators/operands, but it says nothing about
+  // whether run_q, halted or core_reset individually carry the right
+  // *meaning* -- in particular it is silent about how run_q itself gets its
+  // value (that is what RUN_LINK, immediately below, is for; mutation
+  // testing showed T5a alone does not catch a broken run_q update, e.g.
+  // "run_q <= 1'b1;" unconditionally, because that mutation never touches
+  // this `assign active = ...` line that T5a re-types).
   always @(posedge clk)
     assert(active == (run_q && !halted && !core_reset));
+
+  // RUN_LINK (independent fact, not a restatement of a single line): run_q
+  // genuinely tracks `run` delayed by exactly one clock, with the RTL's
+  // actual reset override applied to run_q *itself* -- run_q reads 0 the
+  // cycle after any reset (!rst_n or core_reset), and otherwise equals the
+  // previous cycle's `run`. This is what actually gives T5a's re-derivation
+  // of `active` any teeth against a bug in run_q's own sequential update.
+  always @(posedge clk)
+    if (f_past_valid && $past(rst_n) && !$past(core_reset))
+      assert(run_q == $past(run));
+  always @(posedge clk)
+    if (f_past_valid && (!$past(rst_n) || $past(core_reset)))
+      assert(run_q == 1'b0);
 
   // T5b: the side-effect strobes are low whenever active is low.
   always @(posedge clk)
     if (f_past_valid && !active)
       assert(!gpio_wr_en && !gpio_pin_en && !h2c_pop && !c2h_push);
 
-  // ---- cover: demonstrate the proofs above are not vacuously true.
-  // A WAITT that actually stalls (wait_active held, adv low for at least one
-  // cycle) and then releases (adv fires) on its deadline cycle.
-  always @(posedge clk)
-    if (f_past_valid)
-      cover($past(active) && $past(is_wait) && ($past(w_sub) == `ISA_WAIT_WAITT) &&
-            $past(wait_active) && !$past(adv) && active && adv);
+  // ---- cover: demonstrate the proofs above are not vacuously true. Every
+  // cover below is gated on rst_n && f_past_valid (and $past(rst_n) where a
+  // $past is used), so none of them can be witnessed using garbage
+  // pre-reset flop state (uninitialised registers are formally free before
+  // their first clocked assignment) -- see formal/README.md "Cover
+  // witnesses" for what each of these was actually decoded to show.
 
-  // A timed wait (WAITP/WAITF/WAITL) that completes via timeout (timed_to),
-  // not because its condition/flag became true (!timed_cond).
+  // WAITT release: a formal-only auxiliary register remembers the pc at
+  // which a WAITT instruction genuinely stalled (wait_active held, adv
+  // low). The cover then fires on a *later* cycle where the core is active
+  // on a WAITT at that same pc, releases (adv), and does so exactly when
+  // t_in == rt_v. Tying the release to the recorded pc (rather than just
+  // "the very next cycle advances", as before) rules out the release being
+  // witnessed by an unrelated instruction that merely happens to also
+  // advance.
+  reg       f_waitt_stall_seen = 1'b0;
+  reg [9:0] f_waitt_stall_pc;
+  always @(posedge clk) begin
+    if (!rst_n || core_reset)
+      f_waitt_stall_seen <= 1'b0;
+    else if (active && is_wait && (w_sub == `ISA_WAIT_WAITT) && wait_active && !adv) begin
+      f_waitt_stall_seen <= 1'b1;
+      f_waitt_stall_pc   <= pc;
+    end
+  end
   always @(posedge clk)
-    cover(active && is_wait && is_timed && wait_active && adv && timed_to && !timed_cond);
+    if (rst_n && f_past_valid)
+      cover(f_waitt_stall_seen && (pc == f_waitt_stall_pc) &&
+            active && is_wait && (w_sub == `ISA_WAIT_WAITT) && adv && (t_in == rt_v));
 
-  // A taken branch/jump/return/pin-branch/flag-branch is immediately
-  // followed by the execution of its delay-slot instruction.
+  // Timed-wait timeout: a formal-only auxiliary register latches when a
+  // timed wait (WAITP/WAITF/WAITL) genuinely *starts* post-reset (the cycle
+  // right before wait_active first latches for it), so the completion
+  // covered below is reachable from a real start rather than a state the
+  // solver simply jumped into. Covers that wait completing with its
+  // condition/flag false (a real timeout, not a condition becoming true)
+  // and fto reading back 1 the cycle after (fto <= !timed_cond happens on
+  // the completing adv edge).
+  reg f_timed_wait_started = 1'b0;
+  always @(posedge clk) begin
+    if (!rst_n || core_reset)
+      f_timed_wait_started <= 1'b0;
+    else if (active && is_wait && is_timed && !wait_active)
+      f_timed_wait_started <= 1'b1;
+    else if (wait_active && adv)
+      f_timed_wait_started <= 1'b0;
+  end
   always @(posedge clk)
-    if (f_past_valid)
-      cover($past(active) && $past(adv) && $past(redirect_new) && active && adv);
+    if (f_past_valid && rst_n && $past(rst_n))
+      cover($past(f_timed_wait_started) && $past(active) && $past(is_wait) &&
+            $past(is_timed) && $past(wait_active) && $past(adv) &&
+            $past(timed_to) && !$past(timed_cond) && fto);
 
-  // An OE (output-enable) pin instruction actually executes.
+  // Taken branch -> delay slot -> target: a 3-stage formal-only tracker.
+  // Stage 0->1: a branch/jump/return/pin-branch/flag-branch is actually
+  // taken (active, adv, redirect_new); its target is latched. Stage 1->2:
+  // the delay-slot instruction (fetched at pc+1) itself executes (active,
+  // adv). The cover fires in stage 2's cycle, checking pc has actually
+  // landed on the remembered target -- i.e. genuinely reached the branch
+  // target, not merely "some instruction advanced next".
+  reg [1:0] f_branch_stage = 2'd0;
+  reg [9:0] f_branch_target;
+  always @(posedge clk) begin
+    if (!rst_n || core_reset) begin
+      f_branch_stage <= 2'd0;
+    end else begin
+      case (f_branch_stage)
+        2'd0: if (active && adv && redirect_new) begin
+                f_branch_stage  <= 2'd1;
+                f_branch_target <= redirect_tgt;
+              end
+        2'd1: if (active && adv) f_branch_stage <= 2'd2;
+        default: f_branch_stage <= 2'd0;
+      endcase
+    end
+  end
   always @(posedge clk)
-    cover(gpio_wr_en && gpio_wr_op == `ISA_PIN_OE);
+    if (rst_n && f_past_valid)
+      cover((f_branch_stage == 2'd2) && (pc == f_branch_target));
+
+  // An OE (output-enable) pin instruction actually executes post-reset
+  // (feeds pe_gpio.v's grant-mask cover; kept here too so a cover fails
+  // visibly in *this* module if gpio_wr_en for the PIN class is ever
+  // permanently forced to 0).
+  always @(posedge clk)
+    if (rst_n && f_past_valid)
+      cover(gpio_wr_en && gpio_wr_op == `ISA_PIN_OE);
 `endif
 endmodule

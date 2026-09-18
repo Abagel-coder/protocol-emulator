@@ -1,7 +1,6 @@
 [tasks]
-bmc
-prove
-cover
+bmc prove cover: core
+timebase_bmc timebase_prove: tb
 
 [options]
 bmc: mode bmc
@@ -10,22 +9,34 @@ prove: mode prove
 prove: depth 8
 cover: mode cover
 cover: depth 20
+timebase_bmc: mode bmc
+timebase_bmc: depth 40
+timebase_prove: mode prove
+timebase_prove: depth 300
 timeout 420
 
 [engines]
-smtbmc boolector
+core: smtbmc boolector
+timebase_bmc: smtbmc boolector
+timebase_prove: smtbmc yices
 
 [script]
-read_verilog -formal -I. isa_defs.vh
-read_verilog -formal -I. pe_timebase.v
-read_verilog -formal -I. pe_gpio.v
-read_verilog -formal -I. pe_core.v
-read_verilog -formal core_props.v
-prep -top core_props
+core: read_verilog -formal -I. isa_defs.vh
+core: read_verilog -formal -I. pe_timebase.v
+core: read_verilog -formal -I. pe_gpio.v
+core: read_verilog -formal -I. pe_core.v
+core: read_verilog -formal core_props.v
+core: prep -top core_props
+
+tb: read_verilog -formal -I. pe_timebase.v
+tb: read_verilog -formal timebase_props.v
+tb: prep -top timebase_props
 
 [files]
-../src/isa_defs.vh
-../src/pe_timebase.v
-../src/pe_gpio.v
-../src/pe_core.v
-core_props.v
+core: ../src/isa_defs.vh
+core: ../src/pe_timebase.v
+core: ../src/pe_gpio.v
+core: ../src/pe_core.v
+core: core_props.v
+tb: ../src/pe_timebase.v
+tb: timebase_props.v

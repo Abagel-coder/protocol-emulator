@@ -29,34 +29,34 @@ project:
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
 pinout:
   # Inputs
-  ui[0]: "DATA[0]"
-  ui[1]: "DATA[1]"
-  ui[2]: "DATA[2]"
-  ui[3]: "DATA[3]"
-  ui[4]: "DATA[4]"
-  ui[5]: "DATA[5]"
-  ui[6]: "DATA[6]"
-  ui[7]: "DATA[7]"
+  ui[0]: "PIN_IN0"
+  ui[1]: "PIN_IN1"
+  ui[2]: "PIN_IN2"
+  ui[3]: "PIN_IN3"
+  ui[4]: "HOST_SCK"
+  ui[5]: "HOST_MOSI"
+  ui[6]: "HOST_CS_N"
+  ui[7]: "RUN"
 
   # Outputs
-  uo[0]: "TX"
-  uo[1]: "BUSY"
-  uo[2]: ""
-  uo[3]: ""
-  uo[4]: ""
-  uo[5]: ""
-  uo[6]: ""
-  uo[7]: ""
+  uo[0]: "PIN_OUT0"
+  uo[1]: "PIN_OUT1"
+  uo[2]: "PIN_OUT2"
+  uo[3]: "PIN_OUT3"
+  uo[4]: "PIN_OUT4"
+  uo[5]: "PIN_OUT5"
+  uo[6]: "PIN_OUT6"
+  uo[7]: "HOST_MISO"
 
   # Bidirectional pins
-  uio[0]: "START"
-  uio[1]: ""
-  uio[2]: ""
-  uio[3]: ""
-  uio[4]: ""
-  uio[5]: ""
-  uio[6]: ""
-  uio[7]: ""
+  uio[0]: "PIN_IO0"
+  uio[1]: "PIN_IO1"
+  uio[2]: "PIN_IO2"
+  uio[3]: "PIN_IO3"
+  uio[4]: "PIN_IO4"
+  uio[5]: "PIN_IO5"
+  uio[6]: "PIN_IO6"
+  uio[7]: "PIN_IO7"
 
 # Do not change!
 yaml_version: 6

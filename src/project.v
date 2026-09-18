@@ -5,6 +5,12 @@
  * Tiny Tapeout top level: protocol-emulator core v0.
  *   ui_in[4] SCK, ui_in[5] MOSI, ui_in[6] CS_n, uo_out[7] MISO  (host SPI)
  *   ui_in[7] RUN;  ui_in[3:0] protocol inputs;  uo_out[6:0] protocol outputs;  uio[7:0] bidirectional
+ *
+ * RUN pin synchronisation: ui_in[7] is an asynchronous top-level input, so it is passed
+ * through pe_gpio's 2-flop input synchroniser (ui_sync) before reaching pe_core's own
+ * registered RUN sample (run_q). That is 3 clock cycles total from a RUN pin transition to
+ * the first instruction executing (2 sync flops + 1 core RUN register); pe_core is never fed
+ * the raw asynchronous pin directly.
  */
 `default_nettype none
 module tt_um_abagel_coder_protocol_emulator (
@@ -34,7 +40,7 @@ module tt_um_abagel_coder_protocol_emulator (
   pe_imem_ff u_imem (.clk(clk), .raddr(imem_addr), .rdata(imem_data), .wr_en(imem_wr), .waddr(imem_waddr), .wdata(imem_wdata));
   pe_fifo u_h2c (.clk(clk), .rst_n(rst_n), .push(h2c_push), .wdata(h2c_wdata), .pop(h2c_pop), .rdata(h2c_rdata), .valid(h2c_valid), .full(h2c_full));
   pe_fifo u_c2h (.clk(clk), .rst_n(rst_n), .push(c2h_push), .wdata(c2h_data), .pop(c2h_pop), .rdata(c2h_rdata), .valid(c2h_valid), .full(c2h_full));
-  pe_core u_core (.clk(clk), .rst_n(rst_n), .run(ui_in[7] | ctrl_run), .core_reset(core_reset),
+  pe_core u_core (.clk(clk), .rst_n(rst_n), .run(ui_sync[7] | ctrl_run), .core_reset(core_reset),
                   .imem_addr(imem_addr), .imem_data(imem_data), .t_in(t_out),
                   .ui_sync(ui_sync), .uio_sync(uio_sync), .ui_prev(ui_prev), .uio_prev(uio_prev), .uo_rb(uo_core), .uio_rb(uio_out),
                   .gpio_wr_en(wr_en), .gpio_wr_op(wr_op), .gpio_wr_bank(wr_bank), .gpio_wr_mask(wr_mask),
@@ -46,9 +52,9 @@ module tt_um_abagel_coder_protocol_emulator (
                       .imem_wr(imem_wr), .imem_waddr(imem_waddr), .imem_wdata(imem_wdata),
                       .ctrl_run(ctrl_run), .core_reset(core_reset), .prescale(prescale),
                       .halted(halted), .running(active), .pc(pc), .flags(flags),
-                      .ui_in(ui_in), .uio_in(uio_in), .uo_out(uo_core), .uio_out(uio_out), .uio_oe(uio_oe),
-                      .h2c_push(h2c_push), .h2c_wdata(h2c_wdata), .h2c_valid(h2c_valid),
+                      .ui_in(ui_sync), .uio_in(uio_sync), .uo_out(uo_core), .uio_out(uio_out), .uio_oe(uio_oe),
+                      .h2c_push(h2c_push), .h2c_wdata(h2c_wdata), .h2c_valid(h2c_valid), .h2c_full(h2c_full),
                       .c2h_pop(c2h_pop), .c2h_rdata(c2h_rdata), .c2h_valid(c2h_valid));
   assign uo_out = {miso, uo_core};
-  wire _unused = &{ena, tick, h2c_full, adv, 1'b0};
+  wire _unused = &{ena, tick, adv, 1'b0};
 endmodule

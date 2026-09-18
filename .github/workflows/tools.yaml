@@ -17,4 +17,4 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: YosysHQ/setup-oss-cad-suite@v3
-      - run: cd formal && sby -f core.sby bmc prove cover timebase_bmc timebase_prove
+      - run: cd formal && sby -f core.sby

@@ -53,8 +53,16 @@ module core_props (input wire clk);
     if (f_past_valid && $past(rst_n) && !$past(active))
       assert(uo_out == $past(uo_out) && uio_out == $past(uio_out) && uio_oe == $past(uio_oe));
 
-  // T5d: whenever the core was not active in the previous cycle (and rst_n
-  // was already high), the host FIFO strobes h2c_pop/c2h_push were low too.
+  // T5d (wrapper-level restatement of T5b, NOT an independent cross-module
+  // fact -- see formal/README.md "What is pinned vs. independent"): both
+  // h2c_pop and c2h_push are pe_core outputs, and this harness instantiates
+  // no FIFO (h2c_valid/h2c_data/c2h_full are free (* anyseq *) wires, not a
+  // real queue), so "h2c_pop/c2h_push are low when !active" is already
+  // exactly what T5b (in pe_core.v) asserts about pe_core's own outputs --
+  // unlike T5c, nothing outside pe_core (no register-hold behaviour in
+  // another module) is needed to state or prove it. Kept anyway as a
+  // boundary check: it fails immediately if a future FIFO/host-interface
+  // module were instantiated here and wired to different signals.
   always @(posedge clk)
     if (f_past_valid && $past(rst_n) && !$past(active))
       assert(!$past(h2c_pop) && !$past(c2h_push));

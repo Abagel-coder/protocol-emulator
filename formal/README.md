@@ -93,8 +93,8 @@ do not catch.
 
 | Property | Kind | Why kept |
 |---|---|---|
-| T1 | independent (2-cycle relation between `adv`, `t_in`, `rt_v`) | the deadline-exactness contract itself |
-| T1b | **spec-pinning** (`rt_v` == its own defining expression) | killed by a bug in the source-register select feeding `rt_v` |
+| T1 | **spec-pinning** (same-cycle identity: `adv` chains through `wait_done`/`waitt_done` back to `t_in`/`rt_v`, all in the current cycle) | the deadline-exactness contract itself, and the brief's original headline property |
+| T1b | **spec-pinning** (`rt_v` == its own defining expression, R0 reads as zero, otherwise `regs[w_rt]`) | killed only by an edit to `rt_v`'s own defining line -- it does **not** constrain `w_rt`'s field extraction (`ir[8:6]`), since T1b restates `rt_v` in terms of the very same `w_rt` wire T1 already uses; a wrong field extraction for `w_rt` is consistently wrong everywhere `rt_v` appears and neither T1 nor T1b notices (see "What is NOT proved") |
 | T2a | independent | the "every non-WAIT instruction completes in 1 cycle" contract |
 | T2b | independent (relates `pc` to `$past(next_pc)`, which itself depends on `redir_v`/`redir_t`, i.e. state carried from an earlier cycle, not just this cycle's inputs) | catches a broken redirect path (see mutation M5) |
 | T3 (grant mask) | independent (`f_oe_granted` is an accumulator over history, not a restatement of any single line) | the actual reset-safety contract |
@@ -104,7 +104,8 @@ do not catch.
 | T5a | **spec-pinning** (`active`'s own continuous assignment, restated verbatim) | killed by a bug in `active`'s formula itself (mutation M2), but *not* by a bug in `run_q`'s own update (see RUN_LINK) |
 | RUN_LINK | independent (relates `run_q` to `$past(run)`, i.e. a genuine one-cycle-delay contract) | killed by mutation M3, which T5a alone cannot see |
 | T5b | independent (relates 4 strobes to `active`, a different signal) | the strobe-quiescence contract |
-| T5c/T5d | independent (cross-module: needs pe_gpio's own register-hold behaviour, not just pe_core's strobes) | closes the "nothing changes" half at the actual chip outputs, not just at pe_core's boundary |
+| T5c | independent (cross-module: needs pe_gpio's own register-hold behaviour, not just pe_core's strobes) | closes the "nothing changes" half at the actual chip outputs, not just at pe_core's boundary |
+| T5d | **wrapper-level restatement of T5b**, not an independent cross-module fact | `h2c_pop`/`c2h_push` are pe_core outputs and the harness instantiates no FIFO, so "quiescent when `!active`" is already exactly what T5b asserts about pe_core's own outputs; kept as a boundary check anyway (see comment in `formal/core_props.v`) |
 
 The spec-pinning properties are not redundant busywork: each one is the difference between a
 mutant being caught immediately (`bmc` fails at step 0-3) and passing silently. They are simply a
@@ -161,13 +162,22 @@ hypotheses beyond what facts 1-3 alone state:
   T always advancing by exactly 1, never skipping -- true regardless of `prescale`'s value, but
   the *periodicity* bound in fact 3 is specific to whichever `prescale` was fixed for that
   particular induction run) no longer composes with a single period bound.
+- **The instruction word at the stalled `pc` must remain the same timed-wait instruction for the
+  duration of the wait.** Facts 1+2 pin `wdead`/`wait_active` and the timeout comparison, but they
+  say nothing about `imem_data` itself -- and `core_props.v` deliberately models `imem_data` as a
+  free input every cycle (see "Setup"), not a function of `imem_addr`. Nothing proved in this
+  proof set rules out the *harness* re-decoding the stalled `pc` as a different instruction (a
+  different `w_rt`/`tmo`, or not a wait at all) on some later cycle. On the real chip this is
+  guaranteed by the synchronous-read instruction memory `pe_imem_ff`, which always returns the
+  same word for the same address -- not by anything proved here.
 
-Because both extra hypotheses are about the *environment* during the wait rather than about the
-RTL itself, and because SymbiYosys's BMC/k-induction prove safety invariants, not
+Because all three extra hypotheses are about the *environment* during the wait rather than about
+the RTL itself, and because SymbiYosys's BMC/k-induction prove safety invariants, not
 liveness/eventuality directly, the full bound is stated here as an argument built from three
 independently machine-checked, unbounded (k-induction) facts, not as a single end-to-end formal
-property. A `mode live` proof with fairness constraints on `en` and `prescale` would be needed to
-turn this into one property, which was judged out of scope.
+property. A `mode live` proof with fairness constraints on `en` and `prescale`, plus a
+deterministic instruction-memory model, would be needed to turn this into one property, which was
+judged out of scope.
 
 ## What is NOT proved
 
@@ -178,6 +188,20 @@ turn this into one property, which was judged out of scope.
   equivalence is checked empirically, not formally, by the cycle-accurate differential fuzzer in
   `test/test_diff.py` (`Makefile.core`), which runs both the RTL (via cocotb) and `tools/sim.py`
   against the same randomized instruction streams and compares state every cycle.
+- **The WAITT/timed-wait source-register field decode (`w_rt = ir[8:6]`) is not formally proved,
+  only pinned as a restatement (T1b).** T1b's `assert(rt_v == ((w_rt == 0) ? 0 : regs[w_rt]))`
+  restates `rt_v` in terms of the same `w_rt` wire T1 itself already uses, so a bug in `w_rt`'s own
+  field extraction (e.g. reading `ir[11:9]` instead of `ir[8:6]`) is invisible to both T1 and T1b --
+  they would just be consistently wrong together about which bits of the instruction word select the
+  register. An outside-the-core property (asserting the WAITT/R0 release time from `core_props.v`
+  using only `imem_data`'s own bit positions, never pe_core's internal `w_rt`) was tried and, by
+  mutation testing, confirmed **not** to catch that specific mutant either: `is_wait && w_sub ==
+  WAITT` already forces `ir[11:9] == 0`, so the mutant's `w_rt` reads 0 for *every* WAITT-classified
+  instruction regardless of the real `rt` field -- exactly the R0 case being tested, so the mutant
+  and the correct RTL agree there. This decode step is therefore covered only empirically, by
+  `test/test_diff.py`'s differential fuzzing against `tools/sim.py` (same equivalence gap as the
+  bullet above, called out separately because T1b's comment could otherwise be misread as covering
+  it).
 - **The 65536-tick bound is bounded-hypothesis, not unconditional** -- see "T4's bound: what's
   proved vs. argued" immediately above: it additionally requires the core to stay active and
   `prescale` to stay fixed for the duration of the wait, and it is an argument composed from
@@ -187,9 +211,14 @@ turn this into one property, which was judged out of scope.
   `pe_imem_ff` always returns the same word for the same address. This makes every property
   proved here strictly *stronger* (true for every possible memory contents, including
   pathological ones), but it also means a cover witness can show the *same pc* decoding as
-  different instruction words across consecutive cycles (see "Cover witnesses" below for two
-  concrete examples of this in the WAITT and timeout witnesses) -- this is a known, deliberate
-  looseness of the harness, not a defect in the properties.
+  different instruction words across consecutive cycles (see "Cover witnesses" below for a
+  concrete example of this in the timeout witness -- the WAITT witness no longer exhibits it: its
+  cover now requires the same instruction word at the stall and the release, see "Cover witnesses")
+  -- this is a known, deliberate looseness of the harness, not a defect in the properties.
+- **`pe_gpio` has no `core_reset` input.** It is only ever reset by the chip-wide `rst_n`; a soft
+  core reset (`core_reset` asserted while `rst_n` stays high) does not revoke OE grants or clear
+  `uio_oe`/`uio_out`/`uo_out` -- T3's grant-mask guarantee (`(uio_oe & ~f_oe_granted) == 0`) runs
+  from hard reset (`rst_n`) onward, not from every `core_reset` pulse.
 - **No gate-level / synthesis / place-and-route equivalence is checked here.** These proofs run
   on the pre-synthesis RTL only.
 
@@ -204,7 +233,7 @@ never on the working tree used for the final commit; the working tree was confir
 | M1 | `waitt_done = (t_in == rt_v + 16'd1)` (WAITT release off-by-one) | T1 | **FAILS** `bmc` at step 3 (T1_deadline_exact, `pe_core.v` T1 assert) |
 | M2 | drop `!core_reset` from `active`'s assignment | T5 (T5a) | **FAILS** `bmc` at step 1 (T5a) |
 | M3 | `run_q <= 1'b1;` (RUN ignored) | RUN_LINK (new) | **FAILS** `bmc` (RUN_LINK `run_q == $past(run)` / `run_q == 0` assert); confirmed T5a alone does **not** fail |
-| M4 | OE write does `uio_oe <= 8'hFF;` unconditionally | T3 (grant mask) | **FAILS** `bmc` (T3 grant-mask assert, and also T3b/T3c) |
+| M4 | OE write does `uio_oe <= 8'hFF;` unconditionally | T3 (grant mask) | **FAILS** `bmc` (T3 grant-mask assert) |
 | M5 | `pc <= pc_p1;` (redirect ignored) | T2b | **FAILS** `bmc` (T2b `pc == $past(next_pc)` assert) |
 | M6 | `wdead` re-captured every cycle regardless of `wait_active` | T4 part 1 | **FAILS** `bmc` (T4 part-1 `wdead == $past(wdead)` assert) -- see note below |
 | M7 | `gpio_wr_en` for the PIN class permanently 0 | some cover goal | **FAILS** `cover` (the post-reset OE-executes cover in `pe_core.v` and the OE grant-mask cover in `pe_gpio.v` both become unreachable) |
@@ -252,25 +281,29 @@ Two witnesses were decoded from their VCDs (`formal/core_timebase_*` are unrelat
 witnesses live under `formal/core_cover/engine_0/`) to confirm they are genuine and not an
 artifact of the free-`imem_data` harness silently reusing a different instruction:
 
-- **WAITT release** (`pe_core.v:327-328`, reached at step 6, `engine_0/trace4.vcd`): cycle 2
-  executes an LDI (pc 0 -> 1). Cycle 3 decodes a WAIT-class instruction at pc 1 that does not
-  complete (`adv=0`); because `wait_active` was 0 going in, this cycle's decode (a `DELAY`,
-  `w_sub=1`, in this particular witness) is what actually latches `wait_active<=1` and
-  `wdead<=t_in+tmo` (both 0, since `w_rt` happened to select a still-zero register). Cycle 4, same
-  pc 1 (since cycle 3 didn't advance), now decodes as `WAITT` (`w_sub=0`) with `wait_active=1`
-  (carried over) and `rt_v=4 != t_in(0)` -- still stalling (`adv=0`); this is the cycle the
-  auxiliary `f_waitt_stall_seen`/`f_waitt_stall_pc` latch (pc=1). Cycle 5, same pc 1 again, decodes
-  `WAITT` once more, this time with `rt_v=0 == t_in(0)` -- releases (`adv=1`). The cover fires
-  here: `f_waitt_stall_seen && pc==f_waitt_stall_pc(1) && is_wait && w_sub==WAITT && adv &&
-  t_in==rt_v`. This is a genuine T1 release witness (deadline met exactly, at the recorded pc),
-  though -- exactly as flagged in "What is NOT proved" -- the *instruction word* backing the
-  stall (`DELAY`) differs from the word backing the eventual `WAITT` release, a direct consequence
-  of `imem_data` being free every cycle rather than fixed per address. This is what the fix
-  actually rules out compared to the old cover (which required no `is_wait`/`w_sub` match at the
-  release cycle *at all*): the release is now provably a `WAITT` completing exactly at its
-  deadline at the *same address* the stall was observed at, not an arbitrary unrelated advancing
-  instruction.
-- **Timed-wait timeout** (`pe_core.v:349-351`, reached at step 6, `engine_0/trace3.vcd`): cycle 2
+- **WAITT release** (`pe_core.v:347-348`, reached at step 6, `engine_0/trace4.vcd`, decoded after
+  the `f_waitt_stall_ir` fix): cycle 2 executes a HOST-class `POP R6` (`ir[15:12]==14`, pc 0 -> 1).
+  Cycle 3 decodes `WAITT R7` at pc 1 (`w_sub=0`, `w_rt=7`); `wait_active` was 0 going in and
+  `rt_v=0 != t_in(2)`, so it doesn't complete (`adv=0`) -- this is the generic first-stall cycle
+  that latches `wait_active<=1` for *any* wait sub-op, but not yet `f_waitt_stall_seen` (that
+  latch's own guard requires `wait_active` already 1 *entering* the check, which isn't true until
+  next cycle). Cycle 4, same pc 1 (unadvanced), decodes `WAITT R6` (`w_sub=0`, `w_rt=6`) -- a
+  different WAITT encoding than cycle 3, the one remaining harness artifact from free `imem_data`,
+  but it only affects this transient pre-latch cycle, not the stall/release pair the cover actually
+  compares; `wait_active=1` (carried over) and `rt_v=3 != t_in(2)` -- still stalling (`adv=0`).
+  Because `wait_active` is already 1 entering this cycle's check, *this* is the cycle that latches
+  `f_waitt_stall_seen<=1`, `f_waitt_stall_pc<=1` and `f_waitt_stall_ir<=`(`WAITT R6`'s encoding,
+  `16'b0111000110100000`). Cycle 5, same pc 1, decodes the exact same instruction word as cycle 4
+  (`WAITT R6` again, `ir` unchanged) -- now `rt_v=3 == t_in(3)` -- releases (`adv=1`). The cover
+  fires here: `f_waitt_stall_seen && pc==f_waitt_stall_pc(1) && ir==f_waitt_stall_ir && is_wait &&
+  w_sub==WAITT && adv && t_in==rt_v`, and `ir==f_waitt_stall_ir` holds because cycles 4 and 5 are
+  literally the same instruction word. This is exactly what the fix set out to force: unlike the
+  pre-fix witness (where the stall was backed by a `DELAY` and the release by an unrelated `WAITT`
+  at the same pc), the stall-latch cycle and the release cycle now decode the *identical* `WAITT`
+  encoding -- the witness is genuinely "the same WAITT instruction stalling, then releasing exactly
+  at its deadline," not an artifact of the free-`imem_data` harness silently swapping instructions
+  at a fixed address.
+- **Timed-wait timeout** (`pe_core.v:369-371`, reached at step 6, `engine_0/trace3.vcd`): cycle 2
   decodes a `WAITF` at pc 0 with `w_rt=6` (a still-zero register, so `tmo=0`); since
   `wait_active=0` at decode time, `dead_now=t_in+tmo=0`, which already equals `t_in(0)` --
   `timed_to=1` the same cycle, `timed_cond=0` (flag false) -> `adv=1` immediately (a degenerate
@@ -280,16 +313,16 @@ artifact of the free-`imem_data` harness silently reusing a different instructio
   (carried over) -- `dead_now=wdead=0==t_in(0)`, `timed_to=1`, `timed_cond=0` -> completes
   (`adv=1`) via genuine timeout with the flag/condition false; `f_timed_wait_started` is 1 at this
   point (latched back at cycle 2's decode, never cleared since `wait_active&&adv` never coincided
-  before now) confirming a real post-reset start. Cycle 5: `fto=1`, satisfying the cover. As with
-  the WAITT witness, `wait_active`/`wdead` (genuine registered state) persist correctly across
-  cycles where the *combinationally re-decoded* instruction word at the same pc changes
-  (`DELAY` -> `WAITF`), again a harness artifact disclosed in "What is NOT proved", not a defect
-  in the fix.
-- **Taken branch -> delay slot -> target** (`pe_core.v:378`, reached at step 5): the 3-stage
+  before now) confirming a real post-reset start. Cycle 5: `fto=1`, satisfying the cover.
+  `wait_active`/`wdead` (genuine registered state) persist correctly across cycles where the
+  *combinationally re-decoded* instruction word at the same pc changes (`DELAY` -> `WAITF`) -- this
+  cover was not part of finding 5's fix, so it still carries the free-`imem_data` harness artifact
+  disclosed in "What is NOT proved" (unlike the WAITT witness above, which no longer does).
+- **Taken branch -> delay slot -> target** (`pe_core.v:398`, reached at step 5): the 3-stage
   `f_branch_stage` tracker reaches stage 2 with `pc == f_branch_target`, i.e. a taken redirect's
   delay-slot instruction actually executed and PC genuinely landed on the recorded target -- not
   merely "some instruction advanced next", which is what the previous 2-step cover only checked.
-- **OE pin instruction executes** (`pe_core.v:386`, reached at step 3) and **OE grant-mask cover**
+- **OE pin instruction executes** (`pe_core.v:406`, reached at step 3) and **OE grant-mask cover**
   (`pe_gpio.v:108`, reached at step 4): a post-reset OE-set write executes and `uio_oe` reads back
   exactly the accumulated grant mask the following cycle.
 

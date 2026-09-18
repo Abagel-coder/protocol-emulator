@@ -224,10 +224,23 @@ module pe_core (
   end
 
   // T1b (spec-pinning restatement of a single wire's continuous assignment,
-  // kept for the same reason T5a is -- see formal/README.md): rt_v
-  // really is the selected source register w_rt, reading 0 for r0 like
-  // every other *_v decode wire, so a bug in the source-register select
-  // feeding T1's rt_v is covered by *some* property, not just assumed away.
+  // kept for the same reason T5a is -- see formal/README.md): pins rt_v's
+  // own defining expression -- R0 reads as zero, otherwise regs[w_rt] --
+  // and is killed only by an edit to *that* line. It does NOT constrain
+  // w_rt's own field extraction just above (`ir[8:6]`): this assertion
+  // restates rt_v in terms of the very same w_rt wire T1's own waitt_done
+  // already uses, so a wrong field extraction for w_rt (e.g. reading
+  // ir[11:9], the w_sub field, instead) is consistently wrong everywhere
+  // rt_v is used -- T1 and T1b -- and neither notices. An outside-the-core
+  // property was tried (asserting the WAITT/R0 release time from
+  // core_props.v using only imem_data, not w_rt) and confirmed, by mutation
+  // testing, NOT to catch that specific mutant either: is_wait && w_sub ==
+  // WAITT already forces ir[11:9] == 0, so the mutant's w_rt reads 0 for
+  // every WAITT-classified instruction regardless of the real rt field,
+  // which coincides with the correct R0 case being tested. The
+  // WAITT/timed-wait source-register field decode is therefore covered only
+  // empirically, by test/test_diff.py's differential fuzzing against
+  // tools/sim.py -- see formal/README.md "What is NOT proved".
   always @(posedge clk)
     assert(rt_v == ((w_rt == 3'd0) ? 16'd0 : regs[w_rt]));
 
@@ -304,27 +317,34 @@ module pe_core (
   // their first clocked assignment) -- see formal/README.md "Cover
   // witnesses" for what each of these was actually decoded to show.
 
-  // WAITT release: a formal-only auxiliary register remembers the pc at
-  // which a WAITT instruction genuinely stalled (wait_active held, adv
-  // low). The cover then fires on a *later* cycle where the core is active
-  // on a WAITT at that same pc, releases (adv), and does so exactly when
-  // t_in == rt_v. Tying the release to the recorded pc (rather than just
-  // "the very next cycle advances", as before) rules out the release being
-  // witnessed by an unrelated instruction that merely happens to also
-  // advance.
-  reg       f_waitt_stall_seen = 1'b0;
-  reg [9:0] f_waitt_stall_pc;
+  // WAITT release: a formal-only auxiliary register remembers the pc AND
+  // the instruction word (ir) at which a WAITT instruction genuinely
+  // stalled (wait_active held, adv low). The cover then fires on a *later*
+  // cycle where the core is active on a WAITT at that same pc, decoding the
+  // very same instruction word, releases (adv), and does so exactly when
+  // t_in == rt_v. Latching ir alongside pc (not just pc) closes a harness
+  // artifact: core_props.v's imem_data is free every cycle rather than a
+  // deterministic function of imem_addr (see formal/README.md "What is NOT
+  // proved"), so the same pc could otherwise be re-decoded as a different
+  // instruction word between the stall and the release. Requiring
+  // ir == f_waitt_stall_ir at the release forces the witness to be the same
+  // WAITT encoding stalling and then releasing, not an unrelated word that
+  // merely happens to also decode as WAITT at the same address.
+  reg        f_waitt_stall_seen = 1'b0;
+  reg [9:0]  f_waitt_stall_pc;
+  reg [15:0] f_waitt_stall_ir;
   always @(posedge clk) begin
     if (!rst_n || core_reset)
       f_waitt_stall_seen <= 1'b0;
     else if (active && is_wait && (w_sub == `ISA_WAIT_WAITT) && wait_active && !adv) begin
       f_waitt_stall_seen <= 1'b1;
       f_waitt_stall_pc   <= pc;
+      f_waitt_stall_ir   <= ir;
     end
   end
   always @(posedge clk)
     if (rst_n && f_past_valid)
-      cover(f_waitt_stall_seen && (pc == f_waitt_stall_pc) &&
+      cover(f_waitt_stall_seen && (pc == f_waitt_stall_pc) && (ir == f_waitt_stall_ir) &&
             active && is_wait && (w_sub == `ISA_WAIT_WAITT) && adv && (t_in == rt_v));
 
   // Timed-wait timeout: a formal-only auxiliary register latches when a

@@ -34,11 +34,11 @@ Mode-0 SPI slave, MSB first, one command byte followed by its payload; CS_n must
 |---|---|---|---|
 | `WRITE_IMEM` | 0x01 | 10-bit start address (2 bytes, hi then lo, top 6 bits of the first ignored) then instruction words (2 bytes each, hi then lo); address auto-increments per word | -- |
 | `WRITE_CTRL` | 0x02 | 1 byte: bit0 = run, bit1 = reset (restarts PC at 0) | -- |
-| `READ_STATUS` | 0x03 | -- | 4 bytes: status (bit0 halted, bit1 running, bit2 h2c-FIFO valid/non-empty, bit3 c2h-FIFO empty, bit4 h2c-FIFO full), PC[9:8], PC[7:0], flags[2:0] |
+| `READ_STATUS` | 0x03 | -- | 4 bytes: status (bit0 halted, bit1 running, bit2 h2c-FIFO valid/non-empty, bit3 c2h-FIFO empty, bit4 h2c-FIFO full), PC[9:8], PC[7:0], flags[2:0] (bit0 = Z, bit1 = C, bit2 = TO) |
 | `PUSH_FIFO` | 0x04 | 2 bytes (hi, lo): word pushed to the host->core FIFO (dropped if full) | -- |
 | `POP_FIFO` | 0x05 | -- | 2 bytes (hi, lo): word popped from the core->host FIFO (0 if empty) |
 | `READ_GPIO` | 0x06 | -- | 5 bytes: `ui_in`, `uio_in`, `{1'b0,uo_out}`, `uio_out`, `uio_oe` (all synchronised snapshots) |
-| `WRITE_PRESCALE` | 0x07 | 1 byte: timebase divider | -- |
+| `WRITE_PRESCALE` | 0x07 | 1 byte: timebase divider -- the timebase T ticks once every (value + 1) clock cycles, so 0 (the reset value) means a tick every clock cycle | -- |
 
 Status bit4 (h2c-FIFO full) lets the host poll before a `PUSH_FIFO` instead of racing a silent drop; the FIFO is 4 entries deep.
 
@@ -50,10 +50,11 @@ Status bit4 (h2c-FIFO full) lets the host poll before a `PUSH_FIFO` instead of r
 2. Load a program with `WRITE_IMEM`, then start it with `WRITE_CTRL` (run=1) or by raising `ui[7]`.
 3. Observe the protocol pins (`ui[3:0]`, `uo[6:0]`, `uio[7:0]`) driven by the loaded program, and optionally poll `READ_STATUS` / `READ_GPIO` or exchange words with `PUSH_FIFO` / `POP_FIFO`.
 
-Worked example -- `firmware/blink.s` (toggles `uo[0]` every 8 cycles forever):
+Worked example -- `firmware/blink.s` (toggles `uo[0]` every 10 cycles forever):
 
 ```
-; Toggle uo[0] every 8 cycles forever (period 16 cycles).
+; Toggle uo[0] every 10 cycles forever (period 20 cycles):
+; TGL(1) + DELAY 6(7) + JMP(1) + delay-slot NOP(1) = 10 cycles per loop.
 .equ HALF 6
 top:
   TGL UO, 0x01        ; visible next cycle
@@ -62,7 +63,7 @@ top:
   NOP
 ```
 
-Assemble it to get the instruction words: `.venv/bin/python tools/asm.py firmware/blink.s` prints `4801 7206 a000 0000` (four 16-bit words, PC 0-3).
+Assemble it to get the instruction words: `.venv/bin/python tools/asm.py firmware/blink.s` prints the four 16-bit words for PC 0-3, one per line: `4801`, `7206`, `a000`, `0000`.
 
 The exact SPI byte sequence to load and run it (`tools/host.py`'s `encode_write_imem(0, [0x4801, 0x7206, 0xa000, 0x0000])` and `encode_write_ctrl(run=True)`), each row one CS_n-framed transaction, MSB first:
 
@@ -71,7 +72,7 @@ The exact SPI byte sequence to load and run it (`tools/host.py`'s `encode_write_
 | 1 | low..high | `01 00 00 48 01 72 06 A0 00 00 00` | `WRITE_IMEM`, start address 0x000, then the 4 program words |
 | 2 | low..high | `02 01` | `WRITE_CTRL`, run=1, reset=0 -- the core starts at PC 0 |
 
-After step 2, `uo[0]` toggles every 8 core clocks (16-clock period) indefinitely. `test/test_host.py::load_program_and_run` exercises this exact sequence end to end in cocotb.
+After step 2, `uo[0]` toggles every 10 core clocks (20-clock period) indefinitely. `test/test_host.py::datasheet_blink_sequence` exercises this exact sequence end to end in cocotb: it checks the two byte strings above against what `tools/asm.py` and `tools/host.py` produce from `firmware/blink.s`, sends those literal bytes over the SPI pins, and measures the toggle interval on the `uo[0]` pin itself.
 
 ## External hardware
 

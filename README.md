@@ -1,4 +1,4 @@
-![](../../workflows/gds/badge.svg) ![](../../workflows/docs/badge.svg) ![](../../workflows/test/badge.svg) ![](../../workflows/fpga/badge.svg)
+![](../../workflows/gds/badge.svg) ![](../../workflows/docs/badge.svg) ![](../../workflows/test/badge.svg) ![](../../workflows/tools/badge.svg) ![](../../workflows/fpga/badge.svg)
 
 # Protocol Emulator — Jane Street ASIC Competition entry
 
@@ -24,7 +24,7 @@ An open-source programmable protocol-emulator CPU for IHP 130 nm SG13CMOS5L via 
 | 2026-09-15 | warm-up UART TX | 6x4 | 252 (184 / 68) | 3,507 µm² | 0.39 % of 902,417 µm² core | +13.34 ns | +0.128 ns | 0 (after 3 iterations), 0 antenna | Local LibreLane 3.1.0.dev3 on cmos5l; GDS written; run stopped at the final Magic LEF step by a Docker Desktop file-sharing stall (see PLAN.md risks) |
 | 2026-09-18 | core v0 (64-word FF instruction memory, host SPI port, no lanes) | 6x4 | 12,757 (9,561 / 3,196) | 193,038 µm² | 21.39 % of 902,417 µm² core | +2.58 ns | +0.117 ns | 0 (after 4 iterations), 0 antenna (8 diodes inserted, 22 antenna cells) | GitHub Actions `gds` run [#35402020440](https://github.com/Abagel-coder/protocol-emulator/actions/runs/35402020440) (commit `f743131`) |
 
-Measured library data from the warm-up run: a reset flip-flop (`sg13cmos5l_dfrbpq_1`) is ~49 µm²; the average cell in that netlist is ~13.8 µm². Details and budget implications in [docs/research/competition-brief.md](docs/research/competition-brief.md). Core v0's std-cell split is 9,561 logic cells (buffers, inverters, the 1,604 `sg13cmos5l_dfrbpq_1` flip-flops, and combinational gates, from the post-synthesis stat report) plus 3,196 cells the place-and-route stages added for timing/hold repair and clock-tree buffering (2,959 timing-repair buffers, 147 clock buffers, 68 clock inverters, 22 antenna cells); routed wirelength 450,841 µm over 12,674 nets, 0 max-cap violations, 109 max-fanout violations (both corners), 0 LVS/DRC errors from Magic.
+Measured library data from the warm-up run: a reset flip-flop (`sg13cmos5l_dfrbpq_1`) is ~49 µm²; the average cell in that netlist is ~13.8 µm². Details and budget implications in [docs/research/competition-brief.md](docs/research/competition-brief.md). Core v0's std-cell split is 9,561 logic cells (buffers, inverters, the 1,604 `sg13cmos5l_dfrbpq_1` flip-flops, and combinational gates, from the post-synthesis stat report) plus 3,196 cells the place-and-route stages added for timing/hold repair and clock-tree buffering (2,959 timing-repair buffers, 147 clock buffers, 68 clock inverters, 22 antenna cells); routed wirelength 450,841 µm over 12,674 nets, 0 max-cap violations, 109 max-fanout violations (both corners), a `Checker.MaxSlewViolations` warning for max-slew violations in the `nom_slow_1p08V_125C` corner only (the typical and fast corners reported none; the violation count is in the run's step summary, not the job log), and 0 LVS/DRC errors from Magic.
 
 ## Layout
 
@@ -65,7 +65,7 @@ Tool tests (assembler, ISA generator, Python simulator) and the generator drift 
 
 ```bash
 .venv/bin/pytest -q
-python tools/gen_isa.py --check
+.venv/bin/python tools/gen_isa.py --check
 ```
 
 RTL simulation — host SPI port (`test/Makefile`), core-only with the differential fuzzer (`test/Makefile.core`), timebase/GPIO blocks (`test/Makefile.blocks`), and the UART-firmware equivalence test (`test/Makefile.uartfw`):

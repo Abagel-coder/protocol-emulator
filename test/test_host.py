@@ -1,7 +1,7 @@
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge
-from tools.asm import assemble
+from tools.asm import assemble, assemble_file
 from tools.host import *
 
 async def start(dut):
@@ -9,6 +9,14 @@ async def start(dut):
     dut.ena.value = 1; dut.uio_in.value = 0; dut.ui_in.value = 0x40   # CS_n high, RUN low
     dut.rst_n.value = 0; await ClockCycles(dut.clk, 3); dut.rst_n.value = 1; await ClockCycles(dut.clk, 2)
     return SpiMaster(dut, other_bits=0x00)
+
+# The datasheet's bytes: these two literals are exactly what the "How to test" table in
+# docs/info.md prints for loading and running firmware/blink.s, and must be kept identical to
+# it. datasheet_blink_sequence below also checks them against what tools/asm.py and
+# tools/host.py actually produce from the firmware file, so a change to the firmware, the
+# assembler, the encoders or the datasheet's table fails the test instead of drifting quietly.
+DATASHEET_WRITE_IMEM = bytes([0x01, 0x00, 0x00, 0x48, 0x01, 0x72, 0x06, 0xA0, 0x00, 0x00, 0x00])
+DATASHEET_WRITE_CTRL = bytes([0x02, 0x01])
 
 @cocotb.test()
 async def load_program_and_run(dut):
@@ -21,6 +29,44 @@ async def load_program_and_run(dut):
     st = await spi.xfer(bytes([CMD_READ_STATUS, 0, 0, 0, 0]))
     assert st[1] & 1 == 1, st                                                     # halted
     assert (st[2] << 8 | st[3]) == 3, st                                          # pc at HALT
+
+@cocotb.test()
+async def datasheet_blink_sequence(dut):
+    """docs/info.md's "How to test" walk-through prints an exact SPI byte sequence that loads and
+    starts firmware/blink.s, and claims a cocotb test exercises it -- this is that test. First
+    confirm the printed bytes are still what the tools produce from the real firmware file, then
+    send those literal bytes over the SPI pins and check the datasheet's timing claim on the chip
+    pin itself: uo[0] toggles every 10 core clocks (20-clock period). Only the top-level uo_out
+    pin is observed -- no internal signal -- so this holds identically in gate-level simulation,
+    where the hierarchy does not survive synthesis."""
+    words = assemble_file("../firmware/blink.s")
+    assert DATASHEET_WRITE_IMEM == encode_write_imem(0, words), (
+        "docs/info.md's WRITE_IMEM bytes no longer match encode_write_imem() on firmware/blink.s",
+        DATASHEET_WRITE_IMEM.hex(" "), encode_write_imem(0, words).hex(" "))
+    assert DATASHEET_WRITE_CTRL == encode_write_ctrl(run=True), (
+        "docs/info.md's WRITE_CTRL bytes no longer match encode_write_ctrl(run=True)",
+        DATASHEET_WRITE_CTRL.hex(" "), encode_write_ctrl(run=True).hex(" "))
+
+    spi = await start(dut)
+    await spi.xfer(DATASHEET_WRITE_IMEM)                          # step 1: WRITE_IMEM at address 0
+    await FallingEdge(dut.clk)
+    assert int(dut.uo_out.value) & 1 == 0, "uo[0] moved before the core was started"
+    await spi.xfer(DATASHEET_WRITE_CTRL)                          # step 2: WRITE_CTRL run=1
+
+    # Time the toggles on uo_out[0] alone. The loop is already in steady state by the time the
+    # WRITE_CTRL transfer's trailing CS_n-high settle is over, so every interval seen from here
+    # must be the full loop: TGL(1) + DELAY 6(7) + JMP(1) + delay-slot NOP(1) = 10 core clocks.
+    prev = int(dut.uo_out.value) & 1
+    edges, cycle = [], 0
+    while len(edges) < 6 and cycle < 200:
+        await FallingEdge(dut.clk); cycle += 1
+        cur = int(dut.uo_out.value) & 1
+        if cur != prev:
+            edges.append(cycle); prev = cur
+    assert len(edges) == 6, ("uo[0] did not keep toggling after the datasheet's step 2", edges)
+    intervals = [b - a for a, b in zip(edges, edges[1:])]         # 5 consecutive intervals
+    assert all(i == 10 for i in intervals), (
+        "uo[0] toggle interval is not the datasheet's 10 core clocks", intervals)
 
 @cocotb.test()
 async def run_pin_starts_core_without_ctrl(dut):

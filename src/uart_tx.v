@@ -8,7 +8,9 @@
  * design -> cocotb -> synthesis -> harden loop end to end and to serve as a
  * timing reference for the firmware version that replaces it.
  *
- * Timing contract (checked by test/test.py):
+ * Timing contract (checked by test/test_uart_fw.py via test/Makefile.uartfw, which compares
+ * this transmitter's frame cycle for cycle against firmware/uart_tx.s running on the core;
+ * this file is a test-only reference and is not in info.yaml's source_files):
  *   - `start` is level-sensitive and sampled only while idle.
  *   - The start bit appears on `tx` on the clock edge after `start` is sampled.
  *   - Every bit (start, d0..d7 LSB first, stop) is held for exactly CLKS_PER_BIT cycles.

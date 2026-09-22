@@ -24,15 +24,20 @@ An open-source programmable protocol-emulator CPU for IHP 130 nm SG13CMOS5L via 
 | 2026-09-15 | warm-up UART TX | 6x4 | 252 (184 / 68) | 3,507 µm² | 0.39 % of 902,417 µm² core | +13.34 ns | +0.128 ns | 0 (after 3 iterations), 0 antenna | Local LibreLane 3.1.0.dev3 on cmos5l; GDS written; run stopped at the final Magic LEF step by a Docker Desktop file-sharing stall (see PLAN.md risks) |
 | 2026-09-18 | core v0 (64-word FF instruction memory, host SPI port, no lanes) | 6x4 | 12,757 (9,561 / 3,196) | 193,038 µm² | 21.39 % of 902,417 µm² core | +2.58 ns | +0.117 ns | 0 (after 4 iterations), 0 antenna (8 diodes inserted, 22 antenna cells) | GitHub Actions `gds` run [#35402020440](https://github.com/Abagel-coder/protocol-emulator/actions/runs/35402020440) (commit `f743131`) |
 
-Measured library data from the warm-up run: a reset flip-flop (`sg13cmos5l_dfrbpq_1`) is ~49 µm²; the average cell in that netlist is ~13.8 µm². Details and budget implications in [docs/research/competition-brief.md](docs/research/competition-brief.md). Core v0's std-cell split is 9,561 logic cells (buffers, inverters, the 1,604 `sg13cmos5l_dfrbpq_1` flip-flops, and combinational gates, from the post-synthesis stat report) plus 3,196 cells the place-and-route stages added for timing/hold repair and clock-tree buffering (2,959 timing-repair buffers, 147 clock buffers, 68 clock inverters, 22 antenna cells); routed wirelength 450,841 µm over 12,674 nets, 0 max-cap violations, 109 max-fanout violations (both corners), a `Checker.MaxSlewViolations` warning for max-slew violations in the `nom_slow_1p08V_125C` corner only (the typical and fast corners reported none; the violation count is in the run's step summary, not the job log), and 0 LVS/DRC errors from Magic.
+Measured library data from the warm-up run: a reset flip-flop (`sg13cmos5l_dfrbpq_1`) is ~49 µm²; the average cell in that netlist is ~13.8 µm². Details and budget implications in [docs/research/competition-brief.md](docs/research/competition-brief.md). Core v0's std-cell split is 9,561 logic cells (buffers, inverters, the 1,604 `sg13cmos5l_dfrbpq_1` flip-flops, and combinational gates, from the post-synthesis stat report) plus 3,196 cells the place-and-route stages added for timing/hold repair and clock-tree buffering (2,959 timing-repair buffers, 147 clock buffers, 68 clock inverters, 22 antenna cells); routed wirelength 450,841 µm over 12,674 nets, 0 max-cap violations, 109 max-fanout violations (both corners), a `Checker.MaxSlewViolations` warning for max-slew violations in the `nom_slow_1p08V_125C` corner only (the typical and fast corners reported none; the violation count is not in the job log), and 0 LVS/DRC errors from Magic.
 
 ## Layout
 
 ```
-src/        Verilog sources (list every file in info.yaml and test/Makefile)
+src/        Verilog sources (list every file in info.yaml and test/Makefile) — except
+            src/uart_tx.v, the warm-up fixed-function UART kept only as the timing
+            reference for test/Makefile.uartfw; it is deliberately absent from
+            info.yaml source_files and is never synthesised
 isa/        isa.yaml — the single source of truth for the ISA; generates the assembler,
             the Python simulator's decode table, src/isa_defs.vh and docs/isa.md
-            (tools/gen_isa.py --check enforces no drift)
+            (tools/gen_isa.py --check pins the enumerations, mnemonic table and the
+            reference to it; the field slices in src/pe_core.v are hand-typed and are
+            checked against the ISA by the differential fuzzer, test/test_diff.py)
 tools/      asm.py (assembler), sim.py (Python reference model), host.py (host SPI
             loader-protocol encoders + cocotb SpiMaster), gen_isa.py, isa_defs.py
 tests/      pytest unit tests for tools/ (assembler, generator, simulator)

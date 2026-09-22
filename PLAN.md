@@ -9,8 +9,8 @@ Companion documents:
 
 ## 0. Status, and what is needed from you
 
-- Research is done, the plan and a proposed design are written. **No RTL exists yet, on purpose**: the design should be agreed first.
-- Section 4 lists six decisions (D1–D6). Once they are answered, the next step is a detailed, task-level implementation plan and the week-1 work.
+- Status 2026-09-22: research done, spec v1 approved (2026-09-16), and **core v0 is implemented, hardened and reviewed** on branch `core-v0` (all ten tasks of `docs/superpowers/plans/2026-09-16-core-v0.md`; whole-branch review plus its fix wave complete; see `HANDOFF.md` and the D6 row below). Not merged: the owner decides merge vs. pull request. The next plan is lanes (pin engines), with the equality-only deadline compare, the SRAM instruction memory and the generated field-slice macros as its open items.
+- Section 4's six decisions (D1–D6) are answered (decision log in section 6); the schedule below is the original one and is compressed in `HANDOFF.md`.
 
 ## 1. The brief, condensed
 
@@ -107,7 +107,7 @@ Dependencies on you in this schedule: the sign-up form and the GitHub repo (day 
 
 ## 5. Workstreams
 
-**A. ISA and toolchain.** One machine-readable ISA description (YAML) generates the assembler, the Python simulator's decode table, the Verilog decode constants and the ISA chapter of the docs. This "single source of truth" is both a productivity tool and a verification argument (spec and implementation cannot drift).
+**A. ISA and toolchain.** One machine-readable ISA description (YAML) generates the assembler, the Python simulator's decode table, the Verilog decode constants and the ISA chapter of the docs. This "single source of truth" is both a productivity tool and a verification argument: the enumerations, mnemonic table and reference are generated and `tools/gen_isa.py --check` pins them in CI; the RTL's field slices are still hand-typed, so their agreement with the ISA rests on the differential fuzzer (generating slice macros into `isa_defs.vh` is queued for the next plan).
 
 **B. RTL.** Core, timebase, pin engines, host port, Tiny Tapeout wrapper. Synthesize with Yosys weekly; harden monthly at minimum.
 

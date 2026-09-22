@@ -1,47 +1,10 @@
-# Sample testbench for a Tiny Tapeout project
+# cocotb suites
 
-This is a sample testbench for a Tiny Tapeout project. It uses [cocotb](https://docs.cocotb.org/en/stable/) to drive the DUT and check the outputs.
-See below to get started or for more information, check the [website](https://tinytapeout.com/hdl/testing/).
+Four suites, one Makefile each, all run by the GitHub `test` workflow (`make -B` in this directory; `make` exits 0 even when a test fails, so check the `FAIL=0` summary or grep `results.xml` for `failure`):
 
-## Setting up
+- `Makefile` (`test_host.py`, `tb.v`): the whole chip through its Tiny Tapeout pins -- SPI loader protocol, RUN pin, status/FIFO/GPIO commands, datasheet byte sequences; pin-only, so it also runs at gate level (`GATES=yes` with `gate_level_netlist.v`, which the `gds` workflow does).
+- `Makefile.core` (`test_core.py`, `test_diff.py`, `tb_core.v`): directed core tests with backdoor instruction-memory load, plus the differential fuzzer against `tools/sim.py` (`DIFF_PROGRAMS`, default 200).
+- `Makefile.blocks` (`test_blocks.py`, `tb_blocks.v`): timebase and GPIO blocks on their own.
+- `Makefile.uartfw` (`test_uart_fw.py`, `tb_uartfw.v`): `firmware/uart_tx.s` on the core versus the fixed transmitter `src/uart_tx.v`, cycle for cycle.
 
-1. Edit [Makefile](Makefile) and modify `PROJECT_SOURCES` to point to your Verilog files.
-2. Edit [tb.v](tb.v) and replace `tt_um_example` with your module name.
-
-## How to run
-
-To run the RTL simulation:
-
-```sh
-make -B
-```
-
-To run gatelevel simulation, first harden your project and copy `../runs/wokwi/results/final/verilog/gl/{your_module_name}.v` to `gate_level_netlist.v`.
-
-Then run:
-
-```sh
-make -B GATES=yes
-```
-
-If you wish to save the waveform in VCD format instead of FST format, edit tb.v to use `$dumpfile("tb.vcd");` and then run:
-
-```sh
-make -B FST=
-```
-
-This will generate `tb.vcd` instead of `tb.fst`.
-
-## How to view the waveform file
-
-Using GTKWave
-
-```sh
-gtkwave tb.fst tb.gtkw
-```
-
-Using Surfer
-
-```sh
-surfer tb.fst
-```
+Waveforms land in `tb*.fst` (view with `gtkwave tb.fst tb.gtkw` or `surfer tb.fst`).

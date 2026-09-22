@@ -1,6 +1,14 @@
-# Protocol Emulator ASIC — Design Proposal (v1, awaiting approval)
+# Protocol Emulator ASIC — Design Proposal (v1, approved 2026-09-16)
 
-Date: 2026-09-15 (v0 morning, v1 evening after the prior-art and verification scans in `docs/research/`). Status: **proposal**. The warm-up UART transmitter exists; none of the core is implemented. Numbers marked *(estimate)* must be replaced by synthesis results in the first two weeks.
+Date: 2026-09-15 (v0 morning, v1 evening after the prior-art and verification scans in `docs/research/`). Status: **approved by the owner on 2026-09-16** (PLAN.md decision D6). Numbers marked *(estimate)* are superseded by the core v0 hardening result in README.md.
+
+**Implementation status (2026-09-21).** Core v0 is implemented on branch `core-v0` (`src/`, `tools/`, `test/`, `formal/`; hardened at 12,757 cells, 21.39 % of the 6x4 tile). It deviates from this spec in three places, each an open owner decision for the next plan rather than a settled change to the spec:
+
+- §6, first bullet: deadline compares are **equality only** (`WAITT` releases when `T == Rn`; timed waits when `T` equals the captured deadline), not the wrap-safe signed difference. A deadline that has already passed stalls until `T` wraps (documented in `docs/info.md`, "v0 limitations"). Equality is what the deadline-exactness proof (T1 in `formal/README.md`) states.
+- §8: the instruction memory is a 64 x 16-bit flip-flop array (`src/pe_imem_ff.v`), not the two SRAM macros; addresses alias modulo 64. The macro's power-grid problem on CMOS5L is recorded in `HANDOFF.md` ("next plans").
+- §7: no lanes (pin engines); the LANE instruction class is reserved and executes as a no-op.
+
+The rest of this document is unchanged from the approved v1; §6's property numbering is mapped to the proved theorems in `formal/README.md`.
 
 Changes from v0 are listed in §16.
 

@@ -18,6 +18,7 @@ src/config_merged.json
 sim_build/
 __pycache__/
 results.xml
+results_*.xml
 test/gate_level_netlist.v
 .superpowers/
 

@@ -26,10 +26,10 @@ Written 2026-09-18 for continuing in a new session. **Nothing is merged: all imp
 
 ## State
 
-- Branch `core-v0` at `a76f968`, 23 commits ahead of `main`, fully pushed, working tree clean.
-- All ten plan tasks are implemented. Tasks 1–9 each passed a spec-and-quality review (several after fix rounds). **Task 10's review was interrupted and has not run.**
-- GitHub Actions on `a76f968`: `test`, `docs`, `tools` (pytest + generator drift check + formal) and `gds` (hardening, precheck, gate-level test, viewer) are all green. Run: https://github.com/Abagel-coder/protocol-emulator/actions/runs/35410806312
-- Local suites: pytest 29; cocotb host 10, core 12 directed + differential fuzzer, blocks 3, UART equivalence 1; Verilator lint clean; `formal/core.sby` five tasks pass (`bmc`, `prove`, `cover`, `timebase_bmc`, `timebase_prove`).
+- Branch `core-v0` at the final fix wave's sixth commit (`docs: state what is proved and what CI runs, datasheet limits and caveats, project status`), 31 commits ahead of `main`, working tree clean. Pushed up to `721cc2a`; `65e5894` (Task 10 fix round) and the six fix-wave commits `a84a0ee`, `eebe68b`, `8b83e4b`, `dbbe9ea`, `0e4ec5c` + the docs commit are **local, not pushed**.
+- All ten plan tasks are implemented and each passed a spec-and-quality review (Task 10 approved on re-review 2026-09-21 after one fix round). The whole-branch review (three lenses, 2026-09-21: `.superpowers/sdd/final-review-{rtl,verif,tools}.md`) returned "ready with fixes" -- no Critical finding, no functional RTL bug -- and its fix wave (six commits, `.superpowers/sdd/final-fix-report.md`) is done; **re-review of the fix wave is pending**. The RTL logic is unchanged since `f743131` (comment-only edits and formal-block properties only, verified by a preprocessed diff in the fix report).
+- GitHub Actions on `a76f968`: `test`, `docs`, `tools` (pytest + generator drift check + formal) and `gds` (hardening, precheck, gate-level test, viewer) are all green. Run: https://github.com/Abagel-coder/protocol-emulator/actions/runs/35410806312. Nothing later has run in CI (not pushed); the `test` workflow now also runs the core/fuzzer, blocks and UART suites and `tools` pins OSS CAD Suite 2026-09-15 (README "What CI runs"), so the first push will be the first CI run of those.
+- Local suites (2026-09-22): pytest 39; cocotb host 18, core 14 directed + the 200-program differential fuzzer, blocks 3, UART equivalence 1, all warning-free; Verilator lint clean; `formal/core.sby` five tasks pass (`bmc`, `prove`, `cover`, `timebase_bmc`, `timebase_prove`) with properties T1, T1b (port-bit form), T2a, T2b (successor-address form), P1 reset state, P3 wait persistence, P4 deadline capture, T3/T3b/T3c, T4 parts 1-2, T5a-d, RUN_LINK, and 5 cover goals (`formal/README.md`).
 
 ### Core v0 hardening result (GitHub `gds` run 35402020440, commit `f743131`)
 
@@ -46,11 +46,13 @@ Implications: the design is bigger than the 7–8K-cell estimate, mainly the 64-
 
 ## What is left on this branch (in order)
 
-1. **Task 10 review** (read-only). Inputs: `.superpowers/sdd/task-10-brief.md`, `.superpowers/sdd/task-10-report.md` (controller-written stub; the implementer was cut off before writing its own), diff `.superpowers/sdd/review-75ee1af..a76f968.diff` (regenerate with the superpowers `subagent-driven-development/scripts/review-package 75ee1af HEAD` if the file is gone). Points to judge: the `sg13cmos5l_udp.v` gate-level fix applied to every Makefile with a GL block; `write_imem_survives_bidx_saturation` still decisive now that it watches `uo_out[0]` instead of a hierarchical `pc`; docs' SPI byte sequences and protocol table exact; README numbers consistent; nothing stale; no RTL change.
-2. **Whole-branch review** (`git merge-base main HEAD` .. `HEAD`) on the most capable model, pointed at the minor-findings list below. One fix agent for everything it raises, then re-review.
+1. **Task 10 review** -- done (approved on re-review 2026-09-21; fix commit `65e5894`).
+2. **Whole-branch review** -- done 2026-09-21 (three lenses, reports in `.superpowers/sdd/final-review-*.md`); the single fix wave for everything raised is done (`.superpowers/sdd/final-fix-report.md`, commits `a84a0ee`..the docs commit). **Re-review of the fix wave: pending.**
 3. **Owner decision**: merge `core-v0` to `main`, or open a pull request. Not before asked.
 
-### Minor findings logged during task reviews (triage in the whole-branch review)
+### Minor findings logged during task reviews (triaged in the whole-branch review)
+
+Status after the fix wave (2026-09-22): fixed -- unused `importlib`; assembler dead code / `max_pc` / `.equ`-`.org`-`.word` error wrapping; `reserved_alu_fn_is_noop` (now rs != rd, checks C); stale HALT comment; post-reset assertion and `running` bit; `sim.py` prescale docstring; `w_rt` decode pinned formally; `IN`/PUSH/POP/CALL/RET/IRQ/WAITL/zero-timeout semantics documented. Deferred to the next plan (owner decisions): `pull_request` trigger (all workflows are push-only by convention); `pe_gpio` OE-clear / pin 7 / `tick` block tests; `alu_valid` comment; `pe_imem_ff` `WORDS = 1 << AW`; `h2c_full` gate; `imem_waddr` increment placement; CS_n hold wording; `cs_start` wire; fuzzer `pc` compare; `uart_tx.s` idle-segment check; the `t_in + tmo` adder on the critical path.
 
 - `tests/test_gen_isa.py`: unused `importlib` import. `.github/workflows/tools.yaml`: no `pull_request` trigger.
 - `tools/asm.py`: dead pass-2 address-collision check and unused `max_pc`; `.equ` error wrapping inconsistent with the rest.
@@ -71,7 +73,8 @@ Implications: the design is bigger than the 7–8K-cell estimate, mainly the 64-
 - `uo[7]` is MISO and never writable by firmware; `ui[7:4]` are host lines and read as 0 to firmware.
 - Host SPI: mode 0, MSB first, SCK ≤ clk/16, commands 0x01–0x07 (table in `docs/info.md`); status bit4 = host→core FIFO full.
 - `Sim.step()` returns `(cycle, uo, uio_out, uio_oe, halted)`.
-- Generated files (`docs/isa.md`, `tools/isa_defs.py`, `src/isa_defs.vh`) change only via `isa/isa.yaml` + `.venv/bin/python tools/gen_isa.py`; CI fails on drift.
+- Generated files (`docs/isa.md`, `tools/isa_defs.py`, `src/isa_defs.vh`) change only via `isa/isa.yaml` + `.venv/bin/python tools/gen_isa.py`; CI fails on drift of those three. The field slices in `src/pe_core.v` are hand-typed and are checked only by the differential fuzzer.
+- The instruction memory is 64 words (addresses and jump targets alias modulo 64; the assembler refuses larger programs; zero-fill before RUN). v0 compares deadlines for equality only: a deadline that `T` has already passed waits for a full wrap (`docs/info.md`, "v0 limitations").
 
 ## Environment on this Mac
 
@@ -103,6 +106,8 @@ cd formal && sby -f core.sby       # all five tasks
 2. **SRAM instruction memory** on CMOS5L: the foundry macro fails at power-grid generation because the tile's vertical stripes and the macro's power pins are both on Metal4; the PRISM entry's stripe-alignment plugin is the known fix (notes in `docs/research/competition-brief.md`).
 3. **Protocol firmware + reference models**: UART RX, SPI master/slave, I2C master/slave, then USB low speed and 10BASE-T.
 4. **Verification depth**: MCY mutation score, EQY RTL-vs-netlist equivalence, cocotb-coverage crosses, microcotb replay on the FPGA board, measured AI-assisted property drafting.
+5. **Generate field-slice macros** into `src/isa_defs.vh` (e.g. `ISA_BPIN_LEVEL_MSB/LSB`) and use them in `pe_core.v`, so `gen_isa.py --check` really pins the layout (today only the fuzzer does); also generate the class-count sentence in `docs/info.md`.
+6. **Owner decisions carried over from the whole-branch review**: wrap-safe (signed) deadline compare per spec §6 vs. keeping equality-only (documented as a v0 limitation); moving the `t_in + tmo` adder off the `adv` critical path; keeping `src/uart_tx.v` in `src/` as a documented exception vs. moving it to `test/`; merge `core-v0` vs. pull request.
 
 ## Owner-side items
 

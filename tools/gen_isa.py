@@ -44,6 +44,29 @@ def gen_doc(isa):
     L += ["", "## Field layouts", "", "| Class | Fields (msb:lsb) |", "|---|---|"]
     for c, flds in isa["layouts"].items():
         L.append("| %s | %s |" % (c, ", ".join("%s[%d:%d]" % (f, r[0], r[1]) for f, r in flds.items())))
+    # Symbol tables: every enumeration the assembler accepts by name, so the reference is
+    # self-contained (a reader can write `WAITP UI, 3, RISE, R4` without opening isa.yaml).
+    used_classes = {s["class"] for s in isa["mnemonics"].values()}
+    used_subs = {s["fixed"].get("sub") for s in isa["mnemonics"].values() if s["class"] == "WAIT"}
+    L += ["", "## Symbols", "",
+          "Operand names the assembler accepts (`tools/asm.py`), with their field values. Numbers are accepted anywhere a name is.", "",
+          "| Table | Used by | Symbols |", "|---|---|---|"]
+    def syms(d, note=None):
+        return ", ".join("`%s`=%d%s" % (k, v, (note(k, v) or "") if note else "") for k, v in d.items())
+    L.append("| registers | rd/rs/rn/rt/r operands | %s (`R0` reads as zero, writes to it are discarded) |" % syms(isa["registers"]))
+    L.append("| banks_out | SET/CLR/TGL/OE bank, SETR bank | %s (OE: bank value 1 sets `uio_oe` bits, 0 clears them) |" % syms(isa["banks_out"]))
+    L.append("| banks_in | IN bank; WAITP/BPIN bank use 0 = `UI`, 1 = `UIO` | %s |" % syms(isa["banks_in"]))
+    L.append("| waitp_cond | WAITP cond | %s |" % syms(isa["waitp_cond"]))
+    L.append("| flags | WAITF/BFLAG flag ids | %s (ids 3-31 reserved, read as 0) |" % syms(isa["flags"]))
+    L.append("| alu_fn | ALU class fn field (mnemonics above) | %s (11-15 reserved, no-ops) |" % syms(isa["alu_fn"]))
+    L.append("| br_cond | BR class cond field | %s (6-7 reserved, never taken) |" % syms(isa["br_cond"]))
+    L.append("| pin_op | PIN class op field | %s |" % syms(isa["pin_op"]))
+    L.append("| wait_sub | WAIT class sub field | %s (5-7 reserved: complete immediately, TO = 0) |" %
+             syms(isa["wait_sub"], lambda k, v: "" if v in used_subs else " (no mnemonic in v0)"))
+    L.append("| time_op | TIME class op field | %s |" % syms(isa["time_op"]))
+    L.append("| misc_sub | MISC class sub field | %s (other values reserved, no-ops) |" % syms(isa["misc_sub"]))
+    L.append("| classes | bits [15:12] | %s |" %
+             syms(isa["classes"], lambda k, v: "" if k in used_classes else " (reserved, no-op in v0)"))
     L += ["", "## Semantics", ""]
     for k, v in isa["semantics"].items():
         L.append("- **%s.** %s" % (k, v))

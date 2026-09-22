@@ -67,13 +67,36 @@
 | BFLAG | level[11:11], flag[10:6], simm6[5:0] |
 | HOST | r[11:9], pop[8:8] |
 
+## Symbols
+
+Operand names the assembler accepts (`tools/asm.py`), with their field values. Numbers are accepted anywhere a name is.
+
+| Table | Used by | Symbols |
+|---|---|---|
+| registers | rd/rs/rn/rt/r operands | `R0`=0, `R1`=1, `R2`=2, `R3`=3, `R4`=4, `R5`=5, `R6`=6, `R7`=7 (`R0` reads as zero, writes to it are discarded) |
+| banks_out | SET/CLR/TGL/OE bank, SETR bank | `UO`=0, `UIO`=1 (OE: bank value 1 sets `uio_oe` bits, 0 clears them) |
+| banks_in | IN bank; WAITP/BPIN bank use 0 = `UI`, 1 = `UIO` | `UI`=0, `UIO`=1, `UOR`=2, `UIOR`=3 |
+| waitp_cond | WAITP cond | `LOW`=0, `HIGH`=1, `RISE`=2, `FALL`=3 |
+| flags | WAITF/BFLAG flag ids | `RXV`=0, `TXE`=1, `TO`=2 (ids 3-31 reserved, read as 0) |
+| alu_fn | ALU class fn field (mnemonics above) | `MOV`=0, `ADD`=1, `SUB`=2, `AND`=3, `OR`=4, `XOR`=5, `SHL`=6, `SHR`=7, `ROR`=8, `CMP`=9, `BITT`=10 (11-15 reserved, no-ops) |
+| br_cond | BR class cond field | `BZ`=0, `BNZ`=1, `BC`=2, `BNC`=3, `BTO`=4, `BNTO`=5 (6-7 reserved, never taken) |
+| pin_op | PIN class op field | `SET`=0, `CLR`=1, `TGL`=2, `OE`=3 |
+| wait_sub | WAIT class sub field | `WAITT`=0, `DELAY`=1, `WAITP`=2, `WAITF`=3, `WAITL`=4 (no mnemonic in v0) (5-7 reserved: complete immediately, TO = 0) |
+| time_op | TIME class op field | `SETT`=0, `ADDT`=1 |
+| misc_sub | MISC class sub field | `NOP`=0, `HALT`=1, `RET`=2, `IRQ`=3 (other values reserved, no-ops) |
+| classes | bits [15:12] | `MISC`=0, `LDI`=1, `ALU`=2, `ADDI`=3, `PIN`=4, `SETR`=5, `IN`=6, `WAIT`=7, `TIME`=8, `BR`=9, `JMP`=10, `BPIN`=11, `BFLAG`=12, `LANE`=13 (reserved, no-op in v0), `HOST`=14, `RSV`=15 (reserved, no-op in v0) |
+
 ## Semantics
 
 - **timing.** Every instruction takes exactly one cycle except the WAIT class. Branches, JMP, CALL and RET have one delay slot: the following instruction always executes. Pin output registers written by PIN/SETR update on the clock edge that ends the executing cycle, so the new level is visible from the next cycle.
-- **branches.** Relative targets are pc + 1 + simm (pc = address of the branch). JMP/CALL targets are absolute 10-bit. CALL pushes pc + 2 (the address after the delay slot) onto a 4-entry stack; RET pops it. BR's cond field is 3 bits but only 6 conditions are defined (0-5); cond 6/7 are reserved and never taken.
-- **waits.** WAITT Rn stalls until T == Rn (exact). DELAY n stalls n cycles then completes (n+1 cycles total). WAITP/WAITF/WAITL take a timeout register Rt in ticks of T; Rt = R0 means 65535. On timeout the wait completes and TO = 1, otherwise TO = 0. Reserved WAIT sub-ops (5-7) behave like WAITL: they complete immediately with TO = 0.
+- **branches.** Relative targets are pc + 1 + simm (pc = address of the branch). JMP/CALL targets are absolute 10-bit. CALL pushes pc + 2 (the address after the delay slot) onto a 4-entry stack; RET pops it. BR's cond field is 3 bits but only 6 conditions are defined (0-5); cond 6/7 are reserved and never taken. A branch/JMP/CALL/RET sitting in another one's delay slot is taken too: execution goes to the first target for exactly one instruction, then to the second (A, slot B, TA, TB); a CALL in a delay slot still pushes its own pc + 2.
+- **stack.** The call stack holds 4 return addresses. A fifth CALL drops the oldest entry (the stack keeps the four most recent returns). RET with an empty stack goes to address 0 (and still has its delay slot).
+- **halt.** HALT stops execution at its own address; the core stays halted until a core reset (WRITE_CTRL reset, or the chip reset). Raising RUN again does not restart a halted core. A HALT in a delay slot halts before the pending redirect is taken. IRQ is a no-op in v0.
+- **waits.** WAITT Rn stalls until T == Rn (exact; no timeout). DELAY n stalls n cycles then completes (n+1 cycles total). WAITP/WAITF take a timeout register Rt in ticks of T: the deadline is T at the first stalled cycle plus Rt's value; Rt = R0 means 65535. On timeout the wait completes and TO = 1, otherwise (the condition or flag became true first, or was already true) TO = 0. If Rt's value is 0 the wait completes in its first cycle: TO = 0 if the condition is already true, else TO = 1. WAITL (sub-op 4) has no mnemonic in v0 (no lanes) and, like the reserved sub-ops 5-7, completes immediately with TO = 0. WAITT and DELAY leave TO unchanged.
 - **flag_ids.** WAITF and BFLAG select a flag by id (RXV=0, TXE=1, TO=2). Reserved flag ids (3 and above) always read as 0 (never satisfied).
-- **flags.** ADD/SUB/CMP/ADDI set Z and C (C = carry out of the 16-bit add, or 'no borrow' for SUB/CMP). AND/OR/XOR/MOV/LDI/SHL/SHR/ROR set Z only; SHL/SHR/ROR also set C to the bit shifted out. BITT sets Z = ((rd & rs) == 0) and writes nothing.
+- **flags.** ADD/SUB/CMP/ADDI set Z and C (C = carry out of the 16-bit add, or 'no borrow' for SUB/CMP). AND/OR/XOR/MOV/LDI/LDIH/SHL/SHR/ROR set Z only; SHL/SHR/ROR also set C to the bit shifted out. BITT sets Z = ((rd & rs) == 0) and writes nothing. IN sets Z from the value read. No other instruction changes Z or C; TO is written only when a WAITP/WAITF (or WAITL/reserved sub-op) completes.
+- **host.** PUSH r sends register r to the core-to-host FIFO (4 entries); if it is full the word is dropped (TXE reads 0 while full). POP r takes the oldest word from the host-to-core FIFO (4 entries; RXV reads 1 while non-empty) into r, or writes 0 if it is empty. Both are single-cycle and leave the flags unchanged. R0 as r pushes 0 / discards the popped word.
+- **reserved.** Reserved encodings execute as single-cycle no-ops with no register, flag or pin effect: MISC sub-ops other than NOP/HALT/RET/IRQ, ALU fn 11-15, the LANE (13) and RSV (15) classes. PIN bank values 2 and 3 are reserved (v0 treats them as UIO, bank 1; do not rely on it). Operand bits no instruction reads are ignored: ALU [1:0], SETR [4], IN [6:0], HOST [7:0], WAITT [5:0], JMP/CALL [10].
 - **pins.** SET/CLR/TGL apply mask to the bank's output register. OE bank,mask: bank=1 sets uio_oe bits in mask, bank=0 clears them. SETR bank,pin,rn,bit sets output pin to bit 'bit' of Rn. IN Rd,bank reads the synchronised input bank (2-cycle sampling latency) or an output register. uo has only 7 output bits (pin 7 is the host SPI MISO line, reserved); writes to uo pin 7 from SET/CLR/TGL/SETR are no-ops.
 - **reset.** PC = 0, all registers 0, flags 0, T = 0, uio_oe = 0, outputs 0, core halted until RUN.
 - **run.** The core samples RUN through one register (run_q); on chip, the RUN pin itself first passes through the top level's two-flop input synchroniser before reaching that register, so it is three cycles total from a RUN pin transition to the first instruction executing (2 sync flops + 1 core RUN register). Once sampled, the core becomes active the cycle after run_q's input rises (with the first instruction at PC executing in that cycle) and inactive the cycle after it falls. core_reset takes effect immediately and suppresses all side effects in its cycle.

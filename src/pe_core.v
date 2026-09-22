@@ -223,34 +223,66 @@ module pe_core (
       assert(adv);
   end
 
-  // T1b (spec-pinning restatement of a single wire's continuous assignment,
-  // kept for the same reason T5a is -- see formal/README.md): pins rt_v's
-  // own defining expression -- R0 reads as zero, otherwise regs[w_rt] --
-  // and is killed only by an edit to *that* line. It does NOT constrain
-  // w_rt's own field extraction just above (`ir[8:6]`): this assertion
-  // restates rt_v in terms of the very same w_rt wire T1's own waitt_done
-  // already uses, so a wrong field extraction for w_rt (e.g. reading
-  // ir[11:9], the w_sub field, instead) is consistently wrong everywhere
-  // rt_v is used -- T1 and T1b -- and neither notices. An outside-the-core
-  // property was tried (asserting the WAITT/R0 release time from
-  // core_props.v using only imem_data, not w_rt) and confirmed, by mutation
-  // testing, NOT to catch that specific mutant either: is_wait && w_sub ==
-  // WAITT already forces ir[11:9] == 0, so the mutant's w_rt reads 0 for
-  // every WAITT-classified instruction regardless of the real rt field,
-  // which coincides with the correct R0 case being tested. The
-  // WAITT/timed-wait source-register field decode is therefore covered only
-  // empirically, by test/test_diff.py's differential fuzzing against
-  // tools/sim.py -- see formal/README.md "What is NOT proved".
+  // T1b (spec-pinning restatement, stated on the *port* bits): rt_v -- the
+  // value T1's deadline comparison uses -- is the register selected by
+  // imem_data[8:6] (the ISA's WAIT.rn/rt field, isa/isa.yaml layouts.WAIT),
+  // R0 reading as zero. It deliberately names imem_data[8:6] rather than the
+  // internal w_rt wire: an earlier version restated rt_v in terms of w_rt
+  // itself, which a wrong field extraction (e.g. w_rt = ir[11:9], the w_sub
+  // field) left consistently wrong everywhere rt_v appears, so neither T1
+  // nor that T1b noticed (formal/README.md, mutation E14a). Against the port
+  // bits the same mutant fails bmc at once (E14b); together with P4 below
+  // this is what pins the timed-wait source-register field decode, which
+  // used to be covered only by test/test_diff.py.
   always @(posedge clk)
-    assert(rt_v == ((w_rt == 3'd0) ? 16'd0 : regs[w_rt]));
+    assert(rt_v == ((imem_data[8:6] == 3'd0) ? 16'd0 : regs[imem_data[8:6]]));
 
-  // T2_static_timing (part b): whenever adv was 1 in the previous cycle, pc
-  // now equals the previous cycle's next_pc. (No separate
+  // T2_static_timing (part b, independent -- the successor address stated
+  // WITHOUT the RTL's own next_pc wire): whenever adv was 1 in the previous
+  // cycle, pc now equals the redirect target latched by the instruction
+  // before (if one was pending) and pc+1 otherwise; and the redirect state
+  // itself was latched from that cycle's decode: redir_v == the previous
+  // cycle's redirect_new, and when set redir_t == its redirect_tgt. The
+  // earlier form `pc == $past(next_pc)` restated the next_pc mux and was
+  // blind to a mux that never redirects (formal/README.md, mutation E1);
+  // this form fails bmc at once under that mutant. (No separate
   // !$past(core_reset) conjunct is needed: $past(adv) already implies
   // $past(active), which implies !$past(core_reset).)
   always @(posedge clk)
     if (f_past_valid && $past(rst_n) && $past(adv))
-      assert(pc == $past(next_pc));
+      assert(pc == ($past(redir_v) ? $past(redir_t) : $past(pc) + 10'd1) &&
+             redir_v == $past(redirect_new) && (!redir_v || redir_t == $past(redirect_tgt)));
+
+  // P1_reset_state (independent): the cycle after a reset (!rst_n) or a
+  // core_reset pulse, every control register reads its reset value -- pc 0,
+  // not halted, no pending redirect, no outstanding wait, empty call stack,
+  // flags clear. This is the `WRITE_CTRL` reset contract (docs/info.md):
+  // without it a RESET_CORE issued while a taken branch's delay slot was
+  // pending could restart at 0 and then jump to the stale target
+  // (formal/README.md, mutations E4a/E4b).
+  always @(posedge clk)
+    if (f_past_valid && (!$past(rst_n) || $past(core_reset)))
+      assert(pc == 10'd0 && !halted && !redir_v && !wait_active && stcnt == 3'd0 && {fto, fc, fz} == 3'd0);
+
+  // P3_wait_persists (independent; the lemma T4's 65536-tick argument
+  // needs, formal/README.md "T4's bound" fact 1a): a wait that was active
+  // and did not complete has wait_active set the next cycle -- so T4 part
+  // 1's frozen deadline really is held for the whole stall, and the
+  // deadline cannot be silently re-captured from a later T (mutation E7).
+  always @(posedge clk)
+    if (f_past_valid && $past(rst_n) && !$past(core_reset) && $past(active) && $past(is_wait) && !$past(adv))
+      assert(wait_active);
+
+  // P4_deadline_capture (independent, stated on the port bits): on the
+  // first stalled cycle of a timed wait (WAITP/WAITF/WAITL), the latched
+  // deadline is T at that cycle plus the timeout, where the timeout is
+  // 65535 when the instruction's rt field (imem_data[8:6]) names R0 and
+  // the selected register's value otherwise -- isa.yaml semantics.waits'
+  // "Rt = R0 means 65535", which no property stated before (mutations E6,
+  // E6b: a 65534 default or a one-tick-late capture both survived).
+  always @(posedge clk)
+    if (f_past_valid && $past(rst_n) && !$past(core_reset) && $past(active) && $past(is_timed) && !$past(wait_active) && !$past(adv))
+      assert(wdead == $past(t_in) + (($past(ir[8:6]) == 3'd0) ? 16'hFFFF : $past(rt_v)));
 
   // T4_bounded_wait, structural half 1: once wait_active is set for a wait
   // that does not complete this cycle, its latched deadline wdead is held
@@ -372,13 +404,18 @@ module pe_core (
 
   // Taken branch -> delay slot -> target: a 3-stage formal-only tracker.
   // Stage 0->1: a branch/jump/return/pin-branch/flag-branch is actually
-  // taken (active, adv, redirect_new); its target is latched. Stage 1->2:
-  // the delay-slot instruction (fetched at pc+1) itself executes (active,
-  // adv). The cover fires in stage 2's cycle, checking pc has actually
-  // landed on the remembered target -- i.e. genuinely reached the branch
-  // target, not merely "some instruction advanced next".
+  // taken (active, adv, redirect_new); its target AND its own pc are
+  // latched. Stage 1->2: the delay-slot instruction (fetched at pc+1)
+  // itself executes (active, adv). The cover fires in stage 2's cycle,
+  // checking pc has actually landed on the remembered target -- i.e.
+  // genuinely reached the branch target, not merely "some instruction
+  // advanced next" -- and that the target is not the branch's pc+2, the
+  // address straight-line execution would have reached anyway (a taken
+  // `BZ +1` satisfied the old cover with no redirect at all, so a core
+  // that never redirects still passed it: formal/README.md, mutation E1).
   reg [1:0] f_branch_stage = 2'd0;
   reg [9:0] f_branch_target;
+  reg [9:0] f_branch_pc;
   always @(posedge clk) begin
     if (!rst_n || core_reset) begin
       f_branch_stage <= 2'd0;
@@ -387,6 +424,7 @@ module pe_core (
         2'd0: if (active && adv && redirect_new) begin
                 f_branch_stage  <= 2'd1;
                 f_branch_target <= redirect_tgt;
+                f_branch_pc     <= pc;
               end
         2'd1: if (active && adv) f_branch_stage <= 2'd2;
         default: f_branch_stage <= 2'd0;
@@ -395,7 +433,7 @@ module pe_core (
   end
   always @(posedge clk)
     if (rst_n && f_past_valid)
-      cover((f_branch_stage == 2'd2) && (pc == f_branch_target));
+      cover((f_branch_stage == 2'd2) && (pc == f_branch_target) && (f_branch_target != f_branch_pc + 10'd2));
 
   // An OE (output-enable) pin instruction actually executes post-reset
   // (feeds pe_gpio.v's grant-mask cover; kept here too so a cover fails

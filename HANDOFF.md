@@ -61,7 +61,7 @@ Implications: the design is bigger than the 7–8K-cell estimate, mainly the 64-
 - `tools/sim.py` `prescale` is the divisor; the RTL register is divisor − 1 (naming trap).
 - Differential fuzzer: per-cycle compare does not assert `pc`; pin-freeze probability 0.85 tuned empirically; the 66,000-cycle wrap test adds about 3 s.
 - `firmware/uart_tx.s`: comment why the idle-high block needs a 4-cycle ADDT→pin-write offset while the start bit needs 1; include the idle segment in the RTL edge-spacing check.
-- Formal: the `w_rt` field decode is not formally pinned (only the fuzzer covers it); the 65,536-tick wait bound is an argument composed from proved lemmas, with hypotheses listed in `formal/README.md`.
+- Formal: the WAIT `rt` field decode is now pinned on the port bits (T1b/P4, final fix wave); the other field slices in `pe_core.v` are hand-typed and checked only by the differential fuzzer. The 65,536-tick wait bound is still an argument composed from proved lemmas (now including the "stalled wait keeps `wait_active`" lemma P3 and the deadline-capture lemma P4), with its three environment hypotheses listed in `formal/README.md`.
 
 ## Contracts a newcomer must not get wrong
 

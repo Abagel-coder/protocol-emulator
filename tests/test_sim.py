@@ -1,6 +1,9 @@
+import pathlib
 from tools import isa_defs as D
 from tools.asm import assemble
 from tools.sim import Sim
+
+FIRMWARE = pathlib.Path(__file__).resolve().parents[1] / "firmware"   # not CWD-relative: pytest works from any directory
 
 def run(src, cycles, **kw):
     s = Sim(assemble(src), **kw); return s, s.run(cycles)
@@ -10,7 +13,7 @@ def test_pin_write_visible_next_cycle():
     assert [t[1] for t in tr] == [0, 1, 1, 1]      # written in cycle 0, visible from cycle 1
 
 def test_blink_period_is_10_cycles():
-    src = open("firmware/blink.s").read()
+    src = (FIRMWARE / "blink.s").read_text()
     s, tr = run(src, 64)
     uo = [t[1] & 1 for t in tr]
     # Total loop = TGL(1) + DELAY 6(7) + JMP(1) + delay-slot NOP(1) = 10 cycles.
@@ -34,6 +37,20 @@ def test_waitp_timeout_sets_TO():
     s = Sim(assemble("WAITP UI, 0, HIGH, R2\nHALT\nNOP"))
     s.regs[2] = 3; s.run(10)
     assert s.halted and s.flags["TO"] == 1
+
+def test_r0_timeout_is_65535_ticks():
+    # isa.yaml semantics.waits: a timed wait whose Rt is R0 times out after 65535 ticks. With
+    # prescale=1 (a tick every cycle, T == cycle) and nothing pushed into the host->core FIFO,
+    # WAITF RXV, R0 at pc 0 captures deadline 0 + 65535 in cycle 0 and must still be waiting
+    # after cycle 65534, then complete in cycle 65535 (T == 65535) with TO = 1. Pins the
+    # length of the default timeout, which a 255-tick default (oracle mutant S1) would shorten.
+    s = Sim(assemble("WAITF RXV, R0\nSET UO, 0x01\nHALT\nNOP"), prescale=1)
+    s.run(65535)                                                # cycles 0..65534: T == 65534 after the last of them
+    assert s.pc == 0 and s.wait_state == 65535 and s.flags["TO"] == 0 and not s.halted
+    s.step()                                                    # cycle 65535: T == 65535 == deadline
+    assert s.pc == 1 and s.wait_state is None and s.flags["TO"] == 1
+    tr = s.run(3)
+    assert [t[1] for t in tr] == [0, 1, 1] and s.halted        # SET lands, then HALT
 
 def test_waitp_release_on_rise():
     s = Sim(assemble("WAITP UI, 0, RISE, R0\nSET UO, 0x01\nHALT\nNOP"))
@@ -107,7 +124,7 @@ def test_timebase_t0_wraparound_preserves_waitt_period():
     assert p0 == p_wrap
 
 def test_uart_tx_firmware_bit_timing():
-    s = Sim(assemble(open("firmware/uart_tx.s").read()), prescale=2); tr = s.run(11 * 434 + 20)
+    s = Sim(assemble((FIRMWARE / "uart_tx.s").read_text()), prescale=2); tr = s.run(11 * 434 + 20)
     tx = [t[1] & 1 for t in tr]
     edges = [i for i in range(1, len(tx)) if tx[i] != tx[i-1]]
     # 0x55 = 01010101: start 0, then 1,0,1,0,1,0,1,0, stop 1 -> an edge every bit

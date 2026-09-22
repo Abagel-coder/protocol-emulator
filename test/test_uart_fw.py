@@ -1,3 +1,4 @@
+import os
 import re
 
 import cocotb
@@ -7,7 +8,7 @@ from cocotb.triggers import ClockCycles, FallingEdge
 from tools.asm import assemble
 from tools.host import SpiMaster, encode_write_imem, encode_write_ctrl, encode_write_prescale
 
-FW_PATH = "../firmware/uart_tx.s"
+FW_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "firmware", "uart_tx.s")   # not CWD-relative
 with open(FW_PATH) as _f:
     FW_SRC = _f.read()
 

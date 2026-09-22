@@ -1,14 +1,25 @@
+import os
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge
-from tools.asm import assemble
+from tools.asm import assemble, assemble_file
+
+FIRMWARE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "firmware")
+
+_clk_task = None            # one clock driver per test: cocotb cancels it when the test ends
 
 def load(dut, words):
     for i in range(64): dut.u_imem.mem[i].value = words[i] if i < len(words) else 0
 
-async def boot(dut, src, prescale=0):
-    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
-    load(dut, assemble(src)); dut.prescale.value = prescale; dut.run.value = 0
+async def boot(dut, prog, prescale=0):
+    """Load `prog` (assembly source, or a list of raw 16-bit words), reset, raise RUN.
+    Starts the clock once per test: a test that boots twice must not end up with two
+    drivers writing dut.clk (they would only agree by scheduler-order luck)."""
+    global _clk_task
+    if _clk_task is None or _clk_task.done():
+        _clk_task = Clock(dut.clk, 20, unit="ns").start()
+    load(dut, assemble(prog) if isinstance(prog, str) else prog)
+    dut.prescale.value = prescale; dut.run.value = 0
     dut.rst_n.value = 0; await ClockCycles(dut.clk, 3); dut.rst_n.value = 1; await ClockCycles(dut.clk, 2)
     dut.run.value = 1; await RisingEdge(dut.clk)        # cycle 0 starts after this edge
 
@@ -16,6 +27,13 @@ async def trace(dut, n):
     out = []
     for _ in range(n):
         await FallingEdge(dut.clk); out.append((int(dut.uo_out.value), int(dut.uio_out.value), int(dut.uio_oe.value)))
+    return out
+
+def distinct(seq):
+    """Collapse a per-cycle trace of uo values into the ordered list of distinct values seen."""
+    out = []
+    for v in seq:
+        if not out or v != out[-1]: out.append(v)
     return out
 
 @cocotb.test()
@@ -26,8 +44,12 @@ async def pin_write_visible_next_cycle(dut):
 
 @cocotb.test()
 async def blink_period_10_cycles(dut):
-    await boot(dut, open("../firmware/blink.s").read()); tr = await trace(dut, 64)
+    await boot(dut, assemble_file(os.path.join(FIRMWARE, "blink.s"))); tr = await trace(dut, 64)
     uo = [t[0] & 1 for t in tr]; edges = [i for i in range(1, 64) if uo[i] != uo[i-1]]
+    # 64 cycles at a 10-cycle toggle period give 7 edges (1, 11, ..., 61). Requiring at least 6
+    # is what makes the interval check below non-vacuous: a hung core (DELAY never ending,
+    # RTL mutant E3) produces exactly one edge, for which `all(...)` over an empty zip is True.
+    assert len(edges) >= 6, edges
     assert edges[0] == 1 and all(b - a == 10 for a, b in zip(edges, edges[1:])), edges
 
 @cocotb.test()
@@ -54,6 +76,28 @@ async def waitp_timeout_and_release(dut):
     await boot(dut, "WAITP UI, 0, RISE, R0\nSET UO, 0x01\nHALT\nNOP")
     await trace(dut, 5); dut.ui_in.value = 1; tr = await trace(dut, 8)
     assert int(dut.halted.value) == 1 and tr[-1][0] == 1 and (int(dut.flags.value) >> 2) & 1 == 0
+
+@cocotb.test()
+async def r0_timeout_is_65535_ticks(dut):
+    """isa.yaml semantics.waits: `Rt = R0` means a 65535-tick timeout. Nothing else pins the
+    length (the fuzzer never draws R0 as a timeout register; the WAITP/R0 case above releases
+    on the pin). With prescale 0 a tick is a cycle, and this harness's T reads 0 in cycle 0
+    (tb_core.v), so the WAITF at address 1 first stalls in cycle 1 with T == 1 and a deadline
+    of 1 + 65535 == 0 (mod 2^16): it must complete in cycle 65536, when T is 0 again -- 65535
+    ticks after it started -- then BTO (65537), its delay slot (65538) and SET UO, 0x01 (65539)
+    put the timeout on the pin at cycle 65540. A 65534- or 4095-tick default (RTL mutants E6,
+    R2) moves that edge; a wait that never ends never produces it. TO itself is visible both
+    through the BTO branch (uo[0] rather than uo[2]) and in flags_out."""
+    await boot(dut, "SET UO, 0x02\nWAITF RXV, R0\nBTO to\nNOP\nSET UO, 0x04\nHALT\nNOP\nto: SET UO, 0x01\nHALT\nNOP", prescale=0)
+    first = None
+    for k in range(65600):
+        await FallingEdge(dut.clk)
+        if int(dut.uo_out.value) & 1:
+            first = k; break
+    assert first == 65540, ("uo[0] (the BTO-taken marker) rose at cycle %r, expected 65540" % first)
+    await trace(dut, 3)
+    assert int(dut.uo_out.value) == 0x03 and int(dut.halted.value) == 1, int(dut.uo_out.value)   # 0x02 (running) | 0x01 (timeout branch), never 0x04
+    assert (int(dut.flags.value) >> 2) & 1 == 1, "TO not set after the R0 timeout"
 
 @cocotb.test()
 async def alu_flags_and_r0(dut):
@@ -90,27 +134,34 @@ async def core_reset_suppresses_side_effects(dut):
     assert 0x03 in [t[0] for t in tr], tr
     assert tr[-1][0] == 0x03 and int(dut.halted.value) == 1
 
+def alu_word(fn, rd, rs):
+    return (2 << 12) | (rd << 9) | (rs << 6) | (fn << 2)
+
 @cocotb.test()
 async def reserved_alu_fn_is_noop(dut):
-    # raw ALU word with fn=12 (reserved) should be a no-op
-    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
-    words = [0x1205, (2<<12)|(1<<9)|(1<<6)|(12<<2), 0x1, 0x0]  # LDI R1, 5; reserved ALU fn=12; HALT; NOP
-    load(dut, words); dut.prescale.value = 0; dut.run.value = 0
-    dut.rst_n.value = 0; await ClockCycles(dut.clk, 3); dut.rst_n.value = 1; await ClockCycles(dut.clk, 2)
-    dut.run.value = 1; await RisingEdge(dut.clk)
-    await trace(dut, 8)
-    assert int(dut.u_core.regs[1].value) == 5
+    """ALU fn 11-15 are reserved and must be true no-ops: no register write, no flag change
+    (pe_core.v alu_valid; tools/sim.py falls through to _advance()). rs and rd are different
+    registers holding different values, so a reserved fn that decays into the MOV default
+    (RTL mutant M7: alu_valid forced true) changes R1 to 9 and is caught; C is pre-set by an
+    overflowing ADD and Z cleared by the LDIs, so a reserved fn that decays into ADD or
+    touches the flags is caught too."""
+    words = (assemble("LDI R3, 0xFF\nLDIH R3, 0xFF\nLDI R4, 1\nADD R3, R4\nLDI R1, 5\nLDI R2, 9")   # C=1 from the ADD, then Z=0
+             + [alu_word(12, 1, 2), alu_word(11, 1, 2), alu_word(15, 2, 1)]                      # reserved fn 12, 11, 15
+             + assemble("HALT\nNOP"))
+    await boot(dut, words)
+    await trace(dut, 14)
+    assert int(dut.halted.value) == 1
+    assert int(dut.u_core.regs[1].value) == 5, int(dut.u_core.regs[1].value)
+    assert int(dut.u_core.regs[2].value) == 9, int(dut.u_core.regs[2].value)
     f = int(dut.flags.value)
-    assert f & 1 == 0, f  # Z=0 from the LDI of 5
+    assert f & 1 == 0, f          # Z=0 from LDI R2, 9 (a reserved fn must not set Z)
+    assert (f >> 1) & 1 == 1, f   # C=1 from the overflowing ADD (a reserved fn must not touch C)
 
 @cocotb.test()
 async def pin_bank_field_truthiness(dut):
     # raw PIN word with bank field = 2 should treat it as UIO (like the oracle)
-    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
-    words = [(4<<12)|(0<<10)|(2<<8)|0x10, 0, 0, 0]  # PIN SET with bank=2, mask=0x10; HALT; NOP; NOP
-    load(dut, words); dut.prescale.value = 0; dut.run.value = 0
-    dut.rst_n.value = 0; await ClockCycles(dut.clk, 3); dut.rst_n.value = 1; await ClockCycles(dut.clk, 2)
-    dut.run.value = 1; await RisingEdge(dut.clk)
+    words = [(4<<12)|(0<<10)|(2<<8)|0x10, 0, 0, 0]  # PIN SET with bank=2, mask=0x10; then NOP x3 (the program never halts; 4 cycles are traced)
+    await boot(dut, words)
     await trace(dut, 4)
     assert int(dut.uio_out.value) == 0x10
     assert int(dut.uo_out.value) == 0
@@ -119,6 +170,37 @@ async def pin_bank_field_truthiness(dut):
 async def call_ret(dut):
     await boot(dut, "CALL 4\nNOP\nSET UO, 0x02\nHALT\nSET UO, 0x01\nRET\nNOP\nNOP"); tr = await trace(dut, 10)
     assert int(dut.halted.value) == 1 and tr[-1][0] == 0x03, tr
+
+@cocotb.test()
+async def call_stack_depth_4_overflow_and_ret_on_empty(dut):
+    """The call stack is 4 deep (isa.yaml semantics.branches): four nested CALLs return to the
+    right places, a fifth CALL drops the oldest entry, and RET on an empty stack goes to
+    address 0 (pe_core.v ret_t; tools/sim.py). Each return point sets a distinct uo bit, so
+    the ORDER of uo values on the pin is the stack trace. RTL mutant E11 (st3 never written,
+    stack effectively 3 deep) makes the 4th RET land on 0 instead of its return point."""
+    # 4-deep nesting: f1 -> f2 -> f3 -> f4, unwinding sets 0x10, 0x08, 0x04, 0x02, then 0x01 at top level.
+    await boot(dut, "CALL f1\nNOP\nSET UO, 0x01\nHALT\nNOP\n"
+                    "f1: CALL f2\nNOP\nSET UO, 0x02\nRET\nNOP\n"
+                    "f2: CALL f3\nNOP\nSET UO, 0x04\nRET\nNOP\n"
+                    "f3: CALL f4\nNOP\nSET UO, 0x08\nRET\nNOP\n"
+                    "f4: SET UO, 0x10\nRET\nNOP")
+    tr = await trace(dut, 30)
+    assert distinct([t[0] for t in tr]) == [0x00, 0x10, 0x18, 0x1C, 0x1E, 0x1F], distinct([t[0] for t in tr])
+    assert int(dut.halted.value) == 1 and int(dut.pc.value) == 3
+    # 5-deep nesting: the 5th CALL (in f4) drops CALL#1's return address (5, whose SET UO, 0x01
+    # must therefore never run); after the four remaining RETs the 5th RET finds the stack
+    # empty and goes to 0, where BZ (Z=1 from the LDI R1, 0 -- no later instruction touches Z)
+    # is now taken and reaches `done`. Flags are 0 at reset, so BZ falls through on the first pass.
+    await boot(dut, "BZ done\nNOP\nLDI R1, 0\nCALL f1\nNOP\nSET UO, 0x01\nHALT\nNOP\n"
+                    "f1: CALL f2\nNOP\nSET UO, 0x02\nRET\nNOP\n"
+                    "f2: CALL f3\nNOP\nSET UO, 0x04\nRET\nNOP\n"
+                    "f3: CALL f4\nNOP\nSET UO, 0x08\nRET\nNOP\n"
+                    "f4: CALL f5\nNOP\nSET UO, 0x10\nRET\nNOP\n"
+                    "f5: SET UO, 0x20\nRET\nNOP\n"
+                    "done: SET UO, 0x40\nHALT\nNOP")
+    tr = await trace(dut, 40)
+    assert distinct([t[0] for t in tr]) == [0x00, 0x20, 0x30, 0x38, 0x3C, 0x3E, 0x7E], distinct([t[0] for t in tr])
+    assert int(dut.halted.value) == 1 and int(dut.pc.value) == 32, int(dut.pc.value)   # halted at `done`'s HALT, never at address 6
 
 @cocotb.test()
 async def waitt_period_holds_across_T_wraparound(dut):

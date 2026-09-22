@@ -12,15 +12,20 @@ generated on purpose, not avoided, because every RTL/model divergence found by e
 of this fuzzer was in a reserved encoding (see tests/test_sim.py and the task-7 report) --
 ALU fn now covers the full 4-bit field (0-15, 11-15 reserved), PIN bank the full 2-bit field
 (0-3, 2-3 reserved), WAIT sub the full defined-plus-reserved range (1-7), BFLAG flag the full
-5-bit field (0-31, 3-31 reserved), and class RSV (fully reserved, all-NOP) is generated too.
+5-bit field (0-31, 3-31 reserved), and the reserved classes LANE and RSV (both all-NOP in v0)
+are generated with random operand bits -- LANE used to be generated with all operand bits zero,
+which let an RTL mutant that made LANE perform PIN-style writes (final-review mutant E10) pass as
+`SET UO, 0x00`.
 
-Three encodings are still excluded entirely -- each because it can make a random program stall
-for very long (or forever) rather than because it's untested; directed tests in test_core.py /
-tests/test_sim.py cover them individually:
-  - LDIH: never generated (LDI's `hi` field is fixed 0), so every register only ever holds
-    small LDI-derived values (0-255, or arithmetic on those). This keeps WAITP/WAITF/WAITL's
-    `rt` *register content* (the actual tick count used as a timeout, as opposed to the `rt`
-    field below, which only selects which register) from occasionally landing near 65535.
+Two encodings are still excluded entirely and one is restricted -- each because it can make a
+random program stall for very long (or forever) rather than because it's untested; directed
+tests in test_core.py / tests/test_sim.py cover them individually:
+  - LDIH: generated only occasionally (about one LDI word in ten) and only with imm8 in {0, 1},
+    so every register still holds small values (at most 0x1FF, or arithmetic on those). This
+    keeps WAITP/WAITF/WAITL's `rt` *register content* (the actual tick count used as a timeout,
+    as opposed to the `rt` field below, which only selects which register) from landing near
+    65535, while still exercising the hi-byte load path (a mutant that clears the low byte on
+    LDIH, task-8 mutant E12, used to be caught by directed tests only).
   - WAITT (WAIT sub=0): excluded from the sub choices below. WAITT stalls until T == Rn
     *exactly*; since T is free-running and monotonic, an unlucky Rn makes a random program
     hang for the rest of the run.
@@ -45,7 +50,7 @@ re-seeds those registers rather than corrupting anything. Without this, `rt` (1-
 named a register whose *content* -- not just which register the field picks -- was almost
 always still its reset value of 0: only about a third of the generated instruction classes
 write a register at all, and LDIH (the only encoding that can put a large value in a register)
-is excluded (see above). WAIT's `_deadline()` treats a zero-content register as "deadline ==
+was excluded (it is now generated rarely and only with a 0/1 high byte, see above). WAIT's `_deadline()` treats a zero-content register as "deadline ==
 current tick", so the wait resolves in the same cycle it started -- a "zero-tick" wait that
 never actually exercises multi-cycle stall behaviour. Measured on the oracle alone
 (tools.sim.Sim, no RTL/cocotb), 300 programs x 1500 cycles, same seeds (random.Random(1000+n))
@@ -77,6 +82,11 @@ otherwise toggle it; every other bit, and every cycle without a live WAITP, keep
 oracle (and a firmware author reading the program listing) already has, never from anything
 the RTL computed, so it cannot mask an RTL/model divergence -- see the "after" column above,
 where both condition-driven and timeout completions end up comfortably over 25%.
+
+Re-measured 2026-09-21 after the generator gained random LANE operands and the occasional LDIH
+(same oracle-only method, 300 programs x 1500 cycles; the extra random draws shift every seed's
+stream, so this is a fresh sample rather than a drift): WAITP completions 58.4% condition /
+41.6% timeout, WAITF 53.6% / 46.4% -- still over the 25%-each target.
 """
 import os, random
 import cocotb
@@ -85,7 +95,7 @@ from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge
 from tools import isa_defs as D
 from tools.sim import Sim
 
-N_PROGRAMS = int(os.environ.get("DIFF_PROGRAMS", "25"))
+N_PROGRAMS = int(os.environ.get("DIFF_PROGRAMS", "200"))    # 200 x 1500 cycles ~ 15 s (Icarus); 25 let a stack-depth mutant survive (final-review-verif.md M2)
 N_CYCLES   = int(os.environ.get("DIFF_CYCLES", "1500"))
 IMEM_WORDS = 64
 
@@ -93,7 +103,9 @@ def rand_word(rng):
     cls = rng.choices(["LDI", "ALU", "ADDI", "PIN", "SETR", "IN", "WAIT", "TIME", "BR", "JMP", "BPIN", "BFLAG", "HOST", "MISC", "LANE", "RSV"],
                       weights=[10, 12, 6, 12, 6, 5, 10, 6, 6, 3, 4, 2, 2, 2, 1, 1])[0]
     w = D.CLASSES[cls] << 12; r = rng.randrange
-    if cls == "LDI":   w |= (r(8) << 9) | r(256)                                   # hi=0 only
+    if cls == "LDI":
+        if rng.random() < 0.1: w |= (r(8) << 9) | (1 << 8) | r(2)                  # occasional LDIH with imm8 in {0,1}: exercises the hi-byte path (LDIH clearing the low byte, task-8 mutant E12) while keeping register contents <= 0x1FF, see the docstring
+        else:                  w |= (r(8) << 9) | r(256)                              # LDI (hi=0)
     elif cls == "ALU": w |= (r(8) << 9) | (r(8) << 6) | (r(16) << 2)               # fn: 0-15 (11-15 reserved)
     elif cls == "ADDI": w |= (r(8) << 9) | r(512)
     elif cls == "PIN": w |= (r(4) << 10) | (r(4) << 8) | r(256)                    # bank: 0-3 (2-3 reserved)
@@ -118,6 +130,7 @@ def rand_word(rng):
     elif cls == "BFLAG": w |= (r(2) << 11) | (r(32) << 6) | r(64)                  # flag: 0-31 (3-31 reserved)
     elif cls == "HOST": w |= (r(8) << 9) | (r(2) << 8)
     elif cls == "MISC": w |= rng.choice([0, 0, 2, 3, 9])                            # NOP, RET, IRQ, undefined (no HALT: keep programs running)
+    elif cls == "LANE": w |= r(4096)                                                # reserved lane class: any lower bits, always a no-op in v0 (RTL mutant E10 made it write pins; all-zero operands hid that)
     elif cls == "RSV": w |= r(4096)                                                 # fully reserved class: any lower bits, always a no-op
     return w
 
@@ -150,7 +163,8 @@ async def rtl_matches_model_on_random_programs(dut):
             if sim.wait_state is None: watched = None           # no wait in flight any more (completed, or never started one)
             await FallingEdge(dut.clk)
             got = (k, int(dut.uo_out.value), int(dut.uio_out.value), int(dut.uio_oe.value), int(dut.halted.value))
-            assert got == exp, f"program {n} cycle {k}: rtl={got} model={exp} pc={int(dut.pc.value)}"
+            assert got == exp, (f"program {n} cycle {k}: rtl={got} model={exp} pc={int(dut.pc.value)} "
+                                f"words={' '.join('%04x' % w for w in words)}")
             if rng.random() < 0.15:                                                # change inputs sometimes
                 new_ui, new_uio = rng.randrange(256), rng.randrange(256)           # full 8-bit ui_in: ui[7:4] must be masked away identically on both sides
                 if watched is not None and rng.random() < 0.85:

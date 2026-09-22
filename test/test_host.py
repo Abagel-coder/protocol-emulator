@@ -1,8 +1,11 @@
+import os
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge
 from tools.asm import assemble, assemble_file
 from tools.host import *
+
+FIRMWARE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "firmware")
 
 async def start(dut):
     cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
@@ -39,7 +42,7 @@ async def datasheet_blink_sequence(dut):
     pin itself: uo[0] toggles every 10 core clocks (20-clock period). Only the top-level uo_out
     pin is observed -- no internal signal -- so this holds identically in gate-level simulation,
     where the hierarchy does not survive synthesis."""
-    words = assemble_file("../firmware/blink.s")
+    words = assemble_file(os.path.join(FIRMWARE, "blink.s"))
     assert DATASHEET_WRITE_IMEM == encode_write_imem(0, words), (
         "docs/info.md's WRITE_IMEM bytes no longer match encode_write_imem() on firmware/blink.s",
         DATASHEET_WRITE_IMEM.hex(" "), encode_write_imem(0, words).hex(" "))
@@ -153,30 +156,34 @@ async def write_imem_survives_bidx_saturation(dut):
     """Finding 7: bidx saturates at 0xFF; the old C_IMEM hi/lo byte selection used bidx[0]
     parity, which gets stuck at a constant value forever once bidx saturates, silently
     breaking WRITE_IMEM for any single transaction whose data crosses the bidx=0xFF boundary
-    (word index 126 onward, counting from bidx=0 at the command byte). This sends 128 words
-    -- enough to cross that boundary within one CS_n-active transaction -- and checks that
-    word 127 (which lands in IMEM address 63, the same wrapped address as word 63, since the
-    default IMEM is only 64 words deep) actually overwrote it, i.e. really got written."""
+    (word index 126 onward, counting from bidx=0 at the command byte). This sends 128 words in
+    one CS_n-active transaction; the second 64 overwrite IMEM addresses 0..63 (the memory is 64
+    words, so word 64+k lands at address k): `JMP 63` at address 0, NOP in its delay slot at 1,
+    HALT at 2..62 and `TGL UO, 0x01` at address 63 (word 127, the last one sent, well past the
+    saturation point). Only if word 127 really reached address 63 does the core run the 3-cycle
+    loop 0 -> 1 -> 63 -> 0 (JMP, slot, TGL; pc wraps modulo 64) and toggle uo[0] every 3 cycles;
+    a word that landed anywhere else (mutant M6: imem_waddr stops incrementing once bidx sticks
+    at 0xFF, so words 125..127 all land on address 61) leaves NOP/HALT at 63 and the pin never
+    moves. Pin-only, so it holds identically in gate-level simulation."""
     spi = await start(dut)
     fast = SpiMaster(dut, other_bits=0x00, half_period_ns=160)   # minimum half period (8 core clocks); keeps this long transfer fast
-    tgl_word = assemble("TGL UO, 0x01")[0]
-    words = [0] * 128                          # all NOP except word 127
-    words[127] = tgl_word                      # word 127 -> IMEM addr 63 (127 mod 64), same slot as word 63 (left as NOP)
+    jmp63, nop, halt, tgl = assemble("JMP 63")[0], 0, assemble("HALT")[0], assemble("TGL UO, 0x01")[0]
+    second = [jmp63, nop] + [halt] * 61 + [tgl]                   # words 64..127 -> addresses 0..63
+    assert len(second) == 64
+    words = [nop] * 64 + second
     await fast.xfer(encode_write_imem(0, words))
     assert int(dut.uo_out.value) & 1 == 0, "uo[0] must start low (no TGL has executed yet)"
     await spi.xfer(encode_write_ctrl(run=True))
-    # PC free-runs through the (wrapped) 64-word IMEM at one NOP/cycle, executing TGL only when it
-    # reaches address 63 (first at absolute PC 63, again at PC 127, ...). Watch the real output pin
-    # for its first rising edge rather than reading pe_core's internal pc: a chip-pin observation
-    # holds identically in RTL and gate-level sim, where internal hierarchical signal names like
-    # `user_project.pc` do not survive synthesis. The first edge lands well inside the 64-cycle
-    # window before the next TGL at PC 127 would toggle the pin back and mask a correct result.
-    for _ in range(400):
-        await RisingEdge(dut.clk)
-        if int(dut.uo_out.value) & 1 == 1:
-            break
-    else:
-        assert False, "word 127 (sent after bidx=0xFF saturation) never reached IMEM address 63"
+    prev = int(dut.uo_out.value) & 1
+    edges, cycle = [], 0
+    while len(edges) < 6 and cycle < 400:
+        await FallingEdge(dut.clk); cycle += 1
+        cur = int(dut.uo_out.value) & 1
+        if cur != prev:
+            edges.append(cycle); prev = cur
+    assert len(edges) == 6, ("no 0->1->63 toggle loop: word 127 is not at IMEM address 63", edges)
+    intervals = [b - a for a, b in zip(edges, edges[1:])]
+    assert all(i == 3 for i in intervals), ("toggle interval is not the 3-cycle JMP/slot/TGL loop", intervals)
 
 @cocotb.test()
 async def h2c_fifo_full_reported_and_protected(dut):
@@ -240,12 +247,13 @@ async def write_prescale_doubles_timebase_period(dut):
         prev = int(dut.uo_out.value) & 1
         edges = []
         cycle = 0
-        while len(edges) < 5:
+        while len(edges) < 5 and cycle < 400:       # bounded: a loop that stops toggling must fail, not hang
             await FallingEdge(dut.clk)
             cycle += 1
             cur = int(dut.uo_out.value) & 1
             if cur != prev:
                 edges.append(cycle); prev = cur
+        assert len(edges) == 5, ("uo[0] stopped toggling at prescale %d" % prescale, edges)
         return edges[-1] - edges[-2]   # last (fully steady-state) interval; skips any warm-up edge
 
     p0 = await measure_period(0)
@@ -295,3 +303,228 @@ async def status_fifo_flags_track_push_and_pop(dut):
     await ClockCycles(dut.clk, 10)
     st = await status_byte()
     assert st & 0x08 == 0, ("fifo_tx_empty still set after a core PUSH", st)
+
+# ---- host-port contracts from the datasheet (docs/info.md) that no earlier test distinguished
+# from broken RTL (whole-branch review, final-review-verif.md M3/M4/M5, final-review-rtl.md
+# E4/E8/E8c). All pin-level: no hierarchical reads, nothing X-capable, so they hold in gate-level
+# simulation too.
+
+async def status(spi):
+    st = await spi.xfer(bytes([CMD_READ_STATUS, 0, 0, 0, 0]))
+    return st[1], (st[2] << 8) | st[3], st[4]        # status byte, pc, flags
+
+async def first_edge_after(dut, limit, mask=1):
+    """Number of clock cycles (rising edges) until uo & mask first reads non-zero, sampled at
+    each falling edge; None if it never does within `limit` cycles."""
+    for n in range(1, limit + 1):
+        await RisingEdge(dut.clk); await FallingEdge(dut.clk)
+        if int(dut.uo_out.value) & mask:
+            return n
+    return None
+
+@cocotb.test()
+async def write_imem_start_address_is_honoured(dut):
+    """docs/info.md protocol table: WRITE_IMEM's two address bytes set the start address and
+    the address auto-increments per word. Every other test loads at 0, so a port that ignored
+    the low address byte (mutant M3) was indistinguishable. Load a frame at 0 whose JMP reaches
+    address 4, then load a marker program AT address 4 in a second transaction: with the
+    address honoured the run shows 0x03 on uo (delay-slot SET UO,0x02 then the marker's
+    SET UO,0x01) and halts at pc 5; with the second load landing at 0 instead it shows 0x01 and
+    halts at pc 1."""
+    spi = await start(dut)
+    await spi.xfer(encode_write_imem(0, assemble("JMP 4\nSET UO, 0x02\nHALT\nNOP\nHALT\nNOP\nNOP\nNOP")))   # addresses 0..7 all defined
+    await spi.xfer(encode_write_imem(4, assemble("SET UO, 0x01\nHALT\nNOP")))                             # addresses 4..6
+    await spi.xfer(encode_write_ctrl(run=True)); await ClockCycles(dut.clk, 12); await FallingEdge(dut.clk)
+    assert int(dut.uo_out.value) & 0x7F == 0x03, hex(int(dut.uo_out.value))
+    st, pc, _ = await status(spi)
+    assert st & 1 == 1 and pc == 5, (st, pc)         # halted at address 5, i.e. the marker really lived at 4
+
+@cocotb.test()
+async def run_latency_pin_three_cycles_ctrl_two(dut):
+    """docs/info.md: a RUN-pin transition reaches the first executing instruction after three
+    clock cycles (two synchroniser flops + the core's RUN register), and WRITE_CTRL's run bit,
+    already a register in the clock domain, takes effect one cycle sooner. Pinned on the pin:
+    with `SET UO, 0x01` at address 0 the registered pin write adds one more cycle, so uo[0]
+    must read 1 exactly after the 4th rising edge following the RUN pin's rise (a bypassed
+    synchroniser, mutant M4a, gives 2; an extra stage, M4b, gives 5). For WRITE_CTRL the run
+    bit is set two edges after the 8th SCK rising edge of its payload byte is first sampled
+    (SCK synchroniser + edge detect + byte_done), then RUN register, execute, pin write: uo[0]
+    reads 1 exactly after the 6th rising edge following that SCK edge, i.e. two register
+    stages (ctrl_run, run_q) from the run bit to the first instruction against the pin's three."""
+    spi = await start(dut)
+    await spi.xfer(encode_write_imem(0, assemble("SET UO, 0x01\nHALT\nNOP")))
+    # RUN pin: drive it on a falling edge so the next rising edge is unambiguously the first to see it.
+    await FallingEdge(dut.clk)
+    dut.ui_in.value = 0x80 | 0x40                                    # RUN high, CS_n high, SCK/MOSI low
+    n = await first_edge_after(dut, 10)
+    assert n == 4, ("uo[0] rose after rising edge %r following the RUN pin, expected 4 (3 cycles to the first instruction + the registered pin write)" % n)
+    # WRITE_CTRL: same program, restarted halted-and-stopped; hand-driven SPI aligned to falling edges.
+    dut.ui_in.value = 0x40                                           # RUN low again
+    await spi.xfer(encode_write_ctrl(run=False, reset=True))         # core_reset pulse -> pc 0, not halted; run stays 0
+    await ClockCycles(dut.clk, 4); await FallingEdge(dut.clk)
+    assert int(dut.uo_out.value) & 1 == 1                            # (the pin keeps its value across core_reset: pe_gpio has no core_reset)
+    await spi.xfer(encode_write_imem(0, assemble("CLR UO, 0x01\nSET UO, 0x01\nHALT\nNOP")))   # clears, then sets: the SET is the 2nd instruction
+    half = 20
+    async def drive(sck, mosi, cs_n, cycles):
+        dut.ui_in.value = (sck << 4) | (mosi << 5) | (cs_n << 6)
+        for _ in range(cycles): await FallingEdge(dut.clk)
+    await FallingEdge(dut.clk)
+    await drive(0, 0, 0, half)                                       # CS_n low
+    tx = [CMD_WRITE_CTRL, 0x01]
+    for bi, b in enumerate(tx):
+        for i in range(7, -1, -1):
+            bit = (b >> i) & 1
+            await drive(0, bit, 0, half)
+            last = (bi == 1 and i == 0)
+            if last:
+                dut.ui_in.value = (1 << 4) | (bit << 5)              # 8th SCK rising edge of the payload byte, driven right after a falling edge
+                # The CLR at address 0 executes first, so watch for uo[0] to go 1 -> 0 -> 1: the SET (2nd
+                # instruction) lands one cycle after the CLR. Count edges until the CLR is visible instead.
+                for n in range(1, 12):
+                    await RisingEdge(dut.clk); await FallingEdge(dut.clk)
+                    if int(dut.uo_out.value) & 1 == 0:
+                        break
+                else:
+                    n = None
+            else:
+                await drive(1, bit, 0, half)
+    await FallingEdge(dut.clk); dut.ui_in.value = 0x40               # CS_n high
+    assert n == 6, ("first instruction after WRITE_CTRL run=1 became visible after rising edge %r following the 8th SCK edge, expected 6" % n)
+    await ClockCycles(dut.clk, 4); await FallingEdge(dut.clk)
+    assert int(dut.uo_out.value) & 1 == 1                            # the SET followed one cycle later and the program halted
+
+@cocotb.test()
+async def write_ctrl_run0_stops_core_and_run1_resumes(dut):
+    """docs/info.md: WRITE_CTRL's run bit (or the RUN pin) holds the core active only while
+    asserted. No earlier test ever sent run=0 (mutant M5: a sticky run bit). Start the blink
+    loop, see it toggling, send run=0: the pin must freeze within a few cycles and stay frozen;
+    run=1 again (without reset) resumes the loop where it stopped."""
+    spi = await start(dut)
+    await spi.xfer(encode_write_imem(0, assemble_file(os.path.join(FIRMWARE, "blink.s"))))
+    await spi.xfer(encode_write_ctrl(run=True))
+    async def count_edges(cycles):
+        prev = int(dut.uo_out.value) & 1; edges = 0
+        for _ in range(cycles):
+            await FallingEdge(dut.clk)
+            cur = int(dut.uo_out.value) & 1
+            if cur != prev: edges += 1; prev = cur
+        return edges
+    assert await count_edges(60) >= 5, "blink loop not running before run=0"
+    await spi.xfer(encode_write_ctrl(run=False))
+    st, _, _ = await status(spi)
+    assert st & 0x02 == 0, ("status bit1 (running) still set after run=0", st)
+    assert st & 0x01 == 0, ("core reports halted after a run=0 pause (it must be paused, not halted)", st)
+    await ClockCycles(dut.clk, 4)                                    # let the last in-flight cycle settle
+    assert await count_edges(300) == 0, "uo[0] kept toggling after WRITE_CTRL run=0"
+    await spi.xfer(encode_write_ctrl(run=True))
+    assert await count_edges(60) >= 5, "blink loop did not resume after run=1"
+
+@cocotb.test()
+async def reset_core_mid_wait_restarts_from_pc0(dut):
+    """docs/info.md: WRITE_CTRL bit1 restarts the program at PC 0. A reset issued while the core
+    is stalled in a wait, or while a taken branch's delay slot is pending, must discard that
+    state too (formal P1; mutants E4a: wait_active survives core_reset, E4b: the pending
+    redirect survives). Both are timed so the reset transaction (fast SPI, ~280 clocks) lands
+    inside a DELAY 400:
+      (a) `DELAY 400; SET UO,0x01; HALT` -- after the reset the DELAY must start over, so the
+          pin rises ~400 cycles after the reset (a surviving countdown would rise much sooner);
+      (b) `JMP 4; DELAY 400 (delay slot); ...; 4: SET UO,0x01` -- after the reset the JMP
+          re-executes and its slot's DELAY runs in full before address 4 is reached (a surviving
+          redirect sends the restarted JMP straight to 4 within a few cycles).
+    Each scenario sets its own uo bit (pe_gpio keeps its outputs across core_reset, so a bit
+    set by the previous scenario would otherwise read as an early rise), and that bit still
+    reading 0 when the reset transaction ends proves the reset landed inside the DELAY rather
+    than after the SET -- and is itself the assertion the mutants trip: with a surviving
+    countdown (dcnt is reset to 0, so the stale wait completes at once) or a surviving
+    redirect, the SET executes 2-3 cycles after the reset pulse, before the transaction's
+    trailing CS_n settle is over. Measured on the pristine RTL: the pin rises 392 cycles after a start
+    transaction ends (401 stall cycles + the SET, minus the ~10 cycles between the run/reset
+    pulse and the transaction's trailing CS_n settle), and the same after a mid-wait reset."""
+    spi = await start(dut)
+    fast = SpiMaster(dut, other_bits=0x00, half_period_ns=160)
+    async def scenario(src, mask, expect_lo, expect_hi):
+        await spi.xfer(encode_write_imem(0, assemble(src)))
+        await fast.xfer(encode_write_ctrl(run=True, reset=True))     # start (a fresh program, so reset+run)
+        await fast.xfer(encode_write_ctrl(run=True, reset=True))     # the mid-wait reset under test, ~270 clocks after the start
+        assert int(dut.uo_out.value) & mask == 0, (
+            "uo bit already set when the reset transaction ended: either the reset landed after the SET "
+            "(retime the test) or the restarted program reached its SET within the ~10 trailing cycles of "
+            "the transaction, i.e. a wait countdown or a pending redirect survived core_reset")
+        n = await first_edge_after(dut, 700, mask)
+        assert n is not None and expect_lo <= n <= expect_hi, ("uo bit rose %r cycles after the mid-wait reset, expected %d..%d" % (n, expect_lo, expect_hi))
+        await ClockCycles(dut.clk, 4)
+        st, pc, _ = await status(spi)
+        return pc
+    # (a) DELAY 400 restarted from scratch: 392 cycles (a surviving countdown: ~130).
+    pc = await scenario("DELAY 400\nSET UO, 0x01\nHALT\nNOP", 0x01, 385, 400)
+    assert pc == 2, pc
+    # (b) pending redirect discarded: JMP (1) + DELAY 400 (401) + SET -> 393 cycles (a surviving redirect: ~2).
+    pc = await scenario("JMP 4\nDELAY 400\nHALT\nNOP\nSET UO, 0x02\nHALT\nNOP", 0x02, 385, 402)
+    assert pc == 5, pc
+
+@cocotb.test()
+async def cs_abort_discards_partial_byte(dut):
+    """docs/info.md: a byte is received on the SPI clock edge that samples its last bit, framed
+    by CS_n. Raising CS_n mid-byte must discard the partial byte and the bit count, so the next
+    CS_n-framed transaction is framed from scratch (mutant E8: bitcnt not reset when CS_n is
+    high, so the leftover bits misframe every later byte). A WRITE_CTRL whose payload byte is
+    aborted after 4 bits must not start the core; a complete WRITE_CTRL run=1 right after it
+    must."""
+    spi = await start(dut)
+    await spi.xfer(encode_write_imem(0, assemble("TGL UO, 0x01\nHALT\nNOP")))
+    half = 20
+    async def drive(sck, mosi, cs_n, cycles):
+        dut.ui_in.value = (sck << 4) | (mosi << 5) | (cs_n << 6)
+        for _ in range(cycles): await FallingEdge(dut.clk)
+    await FallingEdge(dut.clk)
+    await drive(0, 0, 0, half)                                       # CS_n low
+    for i in range(7, -1, -1):                                       # full command byte: WRITE_CTRL
+        bit = (CMD_WRITE_CTRL >> i) & 1
+        await drive(0, bit, 0, half); await drive(1, bit, 0, half)
+    for i in range(7, 3, -1):                                        # 4 bits of the payload (0000), then abort
+        await drive(0, 0, 0, half); await drive(1, 0, 0, half)
+    await drive(0, 0, 1, half)                                       # CS_n high mid-byte
+    await ClockCycles(dut.clk, 20); await FallingEdge(dut.clk)
+    st, _, _ = await status(spi)
+    assert st & 0x03 == 0 and int(dut.uo_out.value) & 1 == 0, ("the aborted WRITE_CTRL took effect", st)
+    await spi.xfer(encode_write_ctrl(run=True))
+    await ClockCycles(dut.clk, 10); await FallingEdge(dut.clk)
+    assert int(dut.uo_out.value) & 1 == 1, "WRITE_CTRL run=1 after a mid-byte abort did not start the core (stale bit count)"
+
+@cocotb.test()
+async def unknown_command_is_ignored(dut):
+    """docs/info.md lists commands 0x01..0x07; any other command byte must be ignored together
+    with its payload -- not decoded from its low bits (mutant E8c: cmd <= rx_byte[2:0], under
+    which 0x09 acts as WRITE_IMEM and 0x0A as WRITE_CTRL). Send a fake WRITE_IMEM (0x09) that
+    would overwrite address 0, then a fake WRITE_CTRL (0x0A) with run=1: nothing may run; a
+    real WRITE_CTRL then runs the original program."""
+    spi = await start(dut)
+    await spi.xfer(encode_write_imem(0, assemble("TGL UO, 0x01\nHALT\nNOP")))
+    fake_imem = bytes([0x09]) + encode_write_imem(0, assemble("SET UO, 0x02\nHALT\nNOP"))[1:]
+    await spi.xfer(fake_imem)
+    await spi.xfer(bytes([0x0A, 0x01]))                              # would be run=1 if decoded as 0x02
+    await ClockCycles(dut.clk, 30); await FallingEdge(dut.clk)
+    st, _, _ = await status(spi)
+    assert st & 0x03 == 0, ("core started on an unknown command byte", st)
+    assert int(dut.uo_out.value) & 0x7F == 0, hex(int(dut.uo_out.value))
+    await spi.xfer(encode_write_ctrl(run=True)); await ClockCycles(dut.clk, 10); await FallingEdge(dut.clk)
+    assert int(dut.uo_out.value) & 0x7F == 0x01, ("the fake WRITE_IMEM overwrote address 0", hex(int(dut.uo_out.value)))
+
+@cocotb.test()
+async def post_reset_state_and_running_bit(dut):
+    """docs/info.md "How to test" step 1: after reset the core is halted-until-RUN, uio_oe == 0,
+    all outputs 0 and MISO (uo[7]) idle low. READ_STATUS bit1 (running) reads 1 while the core
+    is active and 0 once it halts (bit0)."""
+    spi = await start(dut)
+    await FallingEdge(dut.clk)
+    assert int(dut.uo_out.value) == 0 and int(dut.uio_out.value) == 0 and int(dut.uio_oe.value) == 0
+    st, pc, flags = await status(spi)
+    assert st & 0x03 == 0 and pc == 0 and flags == 0, (st, pc, flags)     # not halted (no HALT yet), not running, pc 0
+    await spi.xfer(encode_write_imem(0, assemble_file(os.path.join(FIRMWARE, "blink.s"))))
+    await spi.xfer(encode_write_ctrl(run=True))
+    st, _, _ = await status(spi)
+    assert st & 0x03 == 0x02, ("running bit not set while the blink loop runs", st)
+    await spi.xfer(encode_write_imem(0, assemble("HALT\nNOP")))
+    await spi.xfer(encode_write_ctrl(run=True, reset=True)); await ClockCycles(dut.clk, 10)
+    st, _, _ = await status(spi)
+    assert st & 0x03 == 0x01, ("halted core still reports running", st)

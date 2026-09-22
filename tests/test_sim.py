@@ -127,6 +127,10 @@ def test_uart_tx_firmware_bit_timing():
     s = Sim(assemble((FIRMWARE / "uart_tx.s").read_text()), prescale=2); tr = s.run(11 * 434 + 20)
     tx = [t[1] & 1 for t in tr]
     edges = [i for i in range(1, len(tx)) if tx[i] != tx[i-1]]
-    # 0x55 = 01010101: start 0, then 1,0,1,0,1,0,1,0, stop 1 -> an edge every bit
-    assert all(b - a == 434 for a, b in zip(edges, edges[1:])), edges[:12]
-    assert s.halted
+    # 0x55 = 01010101: start 0, then 1,0,1,0,1,0,1,0, stop 1 -> an edge at every bit boundary.
+    # Count them: reset-low -> idle-high, idle -> start, then the 9 boundaries start/d0..d7/stop
+    # = 11 edges, and the line must be left high (stop bit). Spacing alone let a 6-data-bit or
+    # stop-bit-low firmware pass (mutants F1/F3, caught before only by the cocotb equivalence test).
+    assert len(edges) == 11, edges
+    assert all(b - a == 434 for a, b in zip(edges[1:], edges[2:])), edges[:12]   # every bit boundary after idle->start
+    assert tx[-1] == 1 and s.halted

@@ -24,6 +24,11 @@ def _s(v, bits):
 
 class Sim:
     def __init__(self, words, prescale=1, imem_words=64, t0=0):
+        """`prescale` is the tick DIVISOR: T advances once every `prescale` cycles (1 = every
+        cycle). The chip's WRITE_PRESCALE register holds the divisor MINUS ONE (pe_timebase.v
+        counts 0..prescale, so 0 means every cycle) -- `Sim(prescale=N)` corresponds to
+        `encode_write_prescale(N - 1)` / `dut.prescale = N - 1`. `t0` is T's value in cycle 0
+        (the chip's T free-runs from reset, so firmware cannot assume it)."""
         self.imem = [0] * imem_words
         for i, w in enumerate(words): self.imem[i] = w & MASK16
         self.prescale = prescale; self.presc_cnt = 0

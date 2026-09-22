@@ -78,10 +78,10 @@ Implications: the design is bigger than the 7–8K-cell estimate, mainly the 64-
 ```bash
 source env.sh                      # every shell: OSS CAD Suite, venvs, PDK_ROOT, tt_tool
 .venv/bin/pytest -q                # tools
-cd test && make -B                 # host/top-level cocotb (this is what CI's test workflow runs)
-cd test && make -B -f Makefile.core      # core directed tests + differential fuzzer
-cd test && make -B -f Makefile.blocks
-cd test && make -B -f Makefile.uartfw
+make -C test -B                    # host/top-level cocotb
+make -C test -B -f Makefile.core   # core directed tests + differential fuzzer (DIFF_PROGRAMS=25 to shorten)
+make -C test -B -f Makefile.blocks
+make -C test -B -f Makefile.uartfw # CI's test workflow runs all four (README "What CI runs")
 verilator --lint-only -Wall -Wno-DECLFILENAME -Isrc src/*.v --top-module tt_um_abagel_coder_protocol_emulator
 cd formal && sby -f core.sby       # all five tasks
 ```

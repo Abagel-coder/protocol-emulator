@@ -23,18 +23,40 @@ jobs:
         shell: bash
         run: pip install -r test/requirements.txt
 
-      - name: Run tests
+      # Each suite has its own Makefile and would otherwise overwrite results.xml; give each its
+      # own results file (COCOTB_RESULTS_FILE) and check every one for a <failure> element,
+      # because make returns success even when a test fails. The Makefiles export
+      # PYTHONPATH=$(PWD)/.. themselves so the tests can import tools/ (Makefile.core,
+      # Makefile.uartfw, Makefile).
+      - name: Host / top-level tests (test/Makefile, test_host)
         run: |
           cd test
           make clean
           make
-          # make will return success even if the test fails, so check for failure in the results.xml
           ! grep failure results.xml
+
+      - name: Core directed tests + differential fuzzer (test/Makefile.core)
+        run: |
+          cd test
+          COCOTB_RESULTS_FILE=results_core.xml make -B -f Makefile.core
+          ! grep failure results_core.xml
+
+      - name: Timebase / GPIO block tests (test/Makefile.blocks)
+        run: |
+          cd test
+          COCOTB_RESULTS_FILE=results_blocks.xml make -B -f Makefile.blocks
+          ! grep failure results_blocks.xml
+
+      - name: UART firmware equivalence (test/Makefile.uartfw)
+        run: |
+          cd test
+          COCOTB_RESULTS_FILE=results_uartfw.xml make -B -f Makefile.uartfw
+          ! grep failure results_uartfw.xml
 
       - name: Test Summary
         uses: test-summary/action@v2.4
         with:
-          paths: "test/results.xml"
+          paths: "test/results*.xml"
         if: always()
 
       - name: upload waveform and test results
@@ -43,6 +65,6 @@ jobs:
         with:
           name: test-results
           path: |
-            test/tb.fst
-            test/results.xml
+            test/tb*.fst
+            test/results*.xml
             test/output/*

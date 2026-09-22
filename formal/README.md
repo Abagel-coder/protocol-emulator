@@ -244,7 +244,8 @@ judged out of scope.
   `rs`, the PIN/SETR/IN/BR/JMP/BPIN/BFLAG/HOST operand positions -- is a hand-typed `ir[msb:lsb]`
   that the proofs take as given, so a slice moved in `isa/isa.yaml` without a matching RTL edit
   is invisible here (and to `tools/gen_isa.py --check`, which generates enumerations only). That
-  layout agreement is checked by the differential fuzzer, `test/test_diff.py` (`Makefile.core`).
+  layout agreement is checked by the differential fuzzer, `test/test_diff.py` (`Makefile.core`,
+  which the `test` workflow runs).
   Earlier versions of this README listed the `rt` decode
   itself as "covered only empirically"; since T1b was restated on the port bits (and P4 added),
   mutation E14 (`w_rt = ir[11:9]`) fails `bmc` at step 0, so that caveat no longer applies.

@@ -39,8 +39,10 @@ tests/      pytest unit tests for tools/ (assembler, generator, simulator)
 firmware/   assembly programs (e.g. blink.s) assembled with tools/asm.py
 formal/     SymbiYosys proofs (core.sby) for core properties: deadline exactness,
             static timing, reset safety, RUN synchronisation
-test/       cocotb testbenches (tb*.v) and tests (test_*.py); Makefile(.core/.blocks/
-            .uartfw) run RTL or gate-level (GATES=yes) simulation
+test/       cocotb testbenches (tb*.v) and tests (test_*.py): Makefile (host/top level, RTL
+            or gate-level with GATES=yes), Makefile.core (core + differential fuzzer),
+            Makefile.blocks, Makefile.uartfw (RTL only -- their testbenches instantiate
+            sub-modules the flattened netlist no longer has)
 docs/       datasheet text (info.md), generated ISA reference (isa.md), research,
             design specs
 scripts/    setup_env.sh — local toolchain bootstrap for macOS (Apple Silicon)
@@ -68,14 +70,16 @@ Tool tests (assembler, ISA generator, Python simulator) and the generator drift 
 .venv/bin/python tools/gen_isa.py --check
 ```
 
-RTL simulation — host SPI port (`test/Makefile`), core-only with the differential fuzzer (`test/Makefile.core`), timebase/GPIO blocks (`test/Makefile.blocks`), and the UART-firmware equivalence test (`test/Makefile.uartfw`):
+RTL simulation — host SPI port (`test/Makefile`), core-only with the differential fuzzer (`test/Makefile.core`), timebase/GPIO blocks (`test/Makefile.blocks`), and the UART-firmware equivalence test (`test/Makefile.uartfw`); each line works on its own or pasted as a block:
 
 ```bash
-cd test && make -B
-cd test && make -B -f Makefile.core
-cd test && make -B -f Makefile.blocks
-cd test && make -B -f Makefile.uartfw
+make -C test -B
+make -C test -B -f Makefile.core
+make -C test -B -f Makefile.blocks
+make -C test -B -f Makefile.uartfw
 ```
+
+(`make` exits 0 even when a cocotb test fails; look for `FAIL=0` in the summary table, or grep `results.xml` for `failure` as CI does. `DIFF_PROGRAMS=25 make -C test -B -f Makefile.core` shortens the fuzzer from 200 programs to 25.)
 
 Formal proofs (core properties: deadline exactness, static timing, reset safety, RUN synchronisation):
 
@@ -97,6 +101,17 @@ cd test && make -B GATES=yes
 ```
 
 The flow of record is the GitHub `gds` workflow (`TinyTapeout/tt-gds-action@ihp-cmos5l`); local hardening is for iteration.
+
+## What CI runs
+
+Every workflow runs on every push (`.github/workflows/`). What each one actually executes:
+
+- `test` — the four cocotb suites on Icarus (Ubuntu's `iverilog`, cocotb 2.0.1 from `test/requirements.txt`): `test/Makefile` (host/top level, 18 tests), `test/Makefile.core` (14 directed core tests + the 200-program differential fuzzer against `tools/sim.py`), `test/Makefile.blocks` (3), `test/Makefile.uartfw` (1, cycle-exact UART-firmware equivalence); each suite's `results*.xml` is grepped for `failure`.
+- `tools` — `pytest -q` (assembler, generator, simulator; 30 tests, pyyaml 6.0.3 / pytest 8.4.2 pinned), `tools/gen_isa.py --check` (the three generated files match `isa/isa.yaml`), and all five SymbiYosys tasks of `formal/core.sby` on OSS CAD Suite release 2026-09-15.
+- `gds` — hardening with LibreLane via `tt-gds-action@ihp-cmos5l`, the Tiny Tapeout precheck, the gate-level run of `test/Makefile` (`GATES=yes`, host suite only) against the routed netlist, and the GDS viewer.
+- `docs` — the datasheet build from `docs/info.md`.
+
+Not run in CI: Verilator lint (`verilator --lint-only -Wall -Wno-DECLFILENAME -Isrc src/*.v --top-module tt_um_abagel_coder_protocol_emulator`, run locally), and local hardening.
 
 ## License
 

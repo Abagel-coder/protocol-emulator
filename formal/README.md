@@ -248,7 +248,7 @@ judged out of scope.
   which the `test` workflow runs).
   Earlier versions of this README listed the `rt` decode
   itself as "covered only empirically"; since T1b was restated on the port bits (and P4 added),
-  mutation E14 (`w_rt = ir[11:9]`) fails `bmc` at step 0, so that caveat no longer applies.
+  mutation E14 (`w_rt = ir[11:9]`) fails `bmc` at step 1, so that caveat no longer applies.
 - **The 65536-tick bound is bounded-hypothesis, not unconditional** -- see "T4's bound: what's
   proved vs. argued" immediately above: it additionally requires the core to stay active and
   `prescale` to stay fixed for the duration of the wait, and it is an argument composed from
@@ -294,7 +294,7 @@ copy, `bmc` depth 20, boolector):
 
 | # | Mutation | Before this round | Now fails |
 |---|---|---|---|
-| E1 | `next_pc = !adv ? pc : pc_p1` (the redirect leg removed from the successor mux) | bmc/prove/cover all **PASSED** -- the old T2b `pc == $past(next_pc)` restated the mux | T2b (`bmc` step 0) **and** the branch cover is now unreachable (`Unreached cover statement ... pe_core.v` taken-branch cover) |
+| E1 | `next_pc = !adv ? pc : pc_p1` (the redirect leg removed from the successor mux) | bmc/prove/cover all **PASSED** -- the old T2b `pc == $past(next_pc)` restated the mux | T2b (`bmc` step 5) **and** the branch cover is now unreachable (`Unreached cover statement ... pe_core.v` taken-branch cover) |
 | E4a | `wait_active` not cleared by `core_reset` | PASSED every task and every cocotb suite | P1 |
 | E4b | `redir_v`/`redir_t` not cleared by `core_reset` | PASSED every task and every cocotb suite | P1 |
 | E6 | `Rt = R0` timeout `16'hFFFE` (65534 ticks) | PASSED every task and every cocotb suite | P4 |

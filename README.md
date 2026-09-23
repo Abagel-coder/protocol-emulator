@@ -112,7 +112,7 @@ The flow of record is the GitHub `gds` workflow (`TinyTapeout/tt-gds-action@ihp-
 Every workflow runs on every push (`.github/workflows/`). What each one actually executes:
 
 - `test` — the four cocotb suites on Icarus (Ubuntu's `iverilog`, cocotb 2.0.1 from `test/requirements.txt`): `test/Makefile` (host/top level, 18 tests), `test/Makefile.core` (14 directed core tests + the 200-program differential fuzzer against `tools/sim.py`), `test/Makefile.blocks` (3), `test/Makefile.uartfw` (1, cycle-exact UART-firmware equivalence); each suite's `results*.xml` is grepped for `failure`.
-- `tools` — `pytest -q` (assembler, generator, simulator; 30 tests, pyyaml 6.0.3 / pytest 8.4.2 pinned), `tools/gen_isa.py --check` (the three generated files match `isa/isa.yaml`), and all five SymbiYosys tasks of `formal/core.sby` on OSS CAD Suite release 2026-09-15.
+- `tools` — `pytest -q` (assembler, generator, simulator, host encoders; 39 tests, pyyaml 6.0.3 / pytest 8.4.2 pinned), `tools/gen_isa.py --check` (the three generated files match `isa/isa.yaml`), and all five SymbiYosys tasks of `formal/core.sby` on OSS CAD Suite release 2026-09-15.
 - `gds` — hardening with LibreLane via `tt-gds-action@ihp-cmos5l`, the Tiny Tapeout precheck, the gate-level run of `test/Makefile` (`GATES=yes`, host suite only) against the routed netlist, and the GDS viewer.
 - `docs` — the datasheet build from `docs/info.md`.
 

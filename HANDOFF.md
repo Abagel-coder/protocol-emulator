@@ -1,10 +1,10 @@
 # Handoff — protocol-emulator ASIC (Jane Street / Tiny Tapeout CMOS5L)
 
-Written 2026-09-18 for continuing in a new session. **Nothing is merged: all implementation work is on branch `core-v0`; `main` is untouched since the plan commit (`3546bcf`). Do not merge without the owner's say-so.**
+Written 2026-09-18, updated 2026-09-22 after the whole-branch review and its fix wave. **Nothing is merged: all implementation work is on branch `core-v0`; `main` is untouched since the plan commit (`3546bcf`). Do not merge without the owner's say-so.**
 
 ## Paste this into the new session
 
-> Continue the protocol-emulator ASIC project in this folder. Read `HANDOFF.md` first, then `PLAN.md`. We are on branch `core-v0` (pushed, not merged). Pick up at "What is left" in the handoff: run the Task 10 review, then the whole-branch review, and stop before merging. Use subagents where useful, and tell every subagent to do the work itself rather than delegating or waiting on monitors.
+> Continue the protocol-emulator ASIC project in this folder. Read `HANDOFF.md` first, then `PLAN.md`. Branch `core-v0` is reviewed and ready to merge; check "What is left" for the owner decisions and the CI result of the last push. Then start the next plan (lanes) with the writing-plans skill. Run one subagent at a time, tell it to do the work itself in the foreground, and free memory on this Mac first (see "Environment").
 
 ## Where everything is
 
@@ -26,9 +26,9 @@ Written 2026-09-18 for continuing in a new session. **Nothing is merged: all imp
 
 ## State
 
-- Branch `core-v0` at the final fix wave's sixth commit (`docs: state what is proved and what CI runs, datasheet limits and caveats, project status`), 31 commits ahead of `main`, working tree clean. Pushed up to `721cc2a`; `65e5894` (Task 10 fix round) and the six fix-wave commits `a84a0ee`, `eebe68b`, `8b83e4b`, `dbbe9ea`, `0e4ec5c` + the docs commit are **local, not pushed**.
-- All ten plan tasks are implemented and each passed a spec-and-quality review (Task 10 approved on re-review 2026-09-21 after one fix round). The whole-branch review (three lenses, 2026-09-21: `.superpowers/sdd/final-review-{rtl,verif,tools}.md`) returned "ready with fixes" -- no Critical finding, no functional RTL bug -- and its fix wave (six commits, `.superpowers/sdd/final-fix-report.md`) is done; **re-review of the fix wave is pending**. The RTL logic is unchanged since `f743131` (comment-only edits and formal-block properties only, verified by a preprocessed diff in the fix report).
-- GitHub Actions on `a76f968`: `test`, `docs`, `tools` (pytest + generator drift check + formal) and `gds` (hardening, precheck, gate-level test, viewer) are all green. Run: https://github.com/Abagel-coder/protocol-emulator/actions/runs/35410806312. Nothing later has run in CI (not pushed); the `test` workflow now also runs the core/fuzzer, blocks and UART suites and `tools` pins OSS CAD Suite 2026-09-15 (README "What CI runs"), so the first push will be the first CI run of those.
+- Branch `core-v0` at the commit that carries this handoff update (`git log -1`), 33 commits ahead of `main`, working tree clean, pushed. `main` is untouched since the plan commit `3546bcf`.
+- All ten plan tasks are implemented and reviewed. The whole-branch review (three lenses, 2026-09-21, `.superpowers/sdd/final-review-{rtl,verif,tools}.md`) found no Critical issue and no functional RTL bug; its fix wave (six commits `a84a0ee`..`8d0094a`, `.superpowers/sdd/final-fix-report.md`) was re-reviewed 2026-09-22 (`.superpowers/sdd/final-rereview.md`): **ready to merge**. RTL logic is unchanged since the hardened commit `f743131` (only comments and `ifdef FORMAL` properties changed; yosys cell count identical), so the baseline numbers below still describe this RTL.
+- GitHub Actions: last verified green on `721cc2a` (all four workflows). The push of that commit on 2026-09-22 is the first CI run of the new `test` steps (core/fuzzer, blocks, UART suites), of the pinned `tools` formal job, and of the gate-level run of the new host tests — check https://github.com/Abagel-coder/protocol-emulator/actions before merging; if `gl_test` fails on a new host test, the cause is an X-read at gate level (see `test/test_host.py` comments), not the RTL.
 - Local suites (2026-09-22): pytest 39; cocotb host 18, core 14 directed + the 200-program differential fuzzer, blocks 3, UART equivalence 1, all warning-free; Verilator lint clean; `formal/core.sby` five tasks pass (`bmc`, `prove`, `cover`, `timebase_bmc`, `timebase_prove`) with properties T1, T1b (port-bit form), T2a, T2b (successor-address form), P1 reset state, P3 wait persistence, P4 deadline capture, T3/T3b/T3c, T4 parts 1-2, T5a-d, RUN_LINK, and 5 cover goals (`formal/README.md`).
 
 ### Core v0 hardening result (GitHub `gds` run 35402020440, commit `f743131`)
@@ -46,9 +46,12 @@ Implications: the design is bigger than the 7–8K-cell estimate, mainly the 64-
 
 ## What is left on this branch (in order)
 
-1. **Task 10 review** -- done (approved on re-review 2026-09-21; fix commit `65e5894`).
-2. **Whole-branch review** -- done 2026-09-21 (three lenses, reports in `.superpowers/sdd/final-review-*.md`); the single fix wave for everything raised is done (`.superpowers/sdd/final-fix-report.md`, commits `a84a0ee`..the docs commit). **Re-review of the fix wave: pending.**
-3. **Owner decision**: merge `core-v0` to `main`, or open a pull request. Not before asked.
+1. **Check CI on the pushed head** (link above). Fix only if something is red.
+2. **Owner decisions** (nothing here is decided; the code documents the current choice):
+   - Merge `core-v0` into `main` directly, or open a pull request. Not before asked.
+   - Deadline compare: the spec (§6) asks for a wrap-safe signed window; v0 compares for equality, so a `WAITT` whose deadline `T` has already passed waits a full 65,536-tick wrap (documented in `docs/info.md`, "v0 limitations"). Change the RTL in the lanes plan, or keep it and keep the note.
+   - `src/uart_tx.v` stays in `src/` as a documented test-only reference (not in `info.yaml` `source_files`), or moves to `test/`.
+3. Then the next plan: lanes (below).
 
 ### Minor findings logged during task reviews (triaged in the whole-branch review)
 
@@ -91,14 +94,16 @@ cd formal && sby -f core.sby       # all five tasks
 
 - If `env.sh` is missing: `scripts/setup_env.sh --skip-brew` (Homebrew at `/usr/local` has an unwritable directory; the step is optional).
 - cocotb runs from the OSS CAD Suite's own Python (pinned to 2.0.1); the project `.venv` holds pytest and pyyaml only.
+- **This Mac runs out of memory under review workloads** (16 GB; 2026-09-22: 5.4 GB swap used, agents stalled every 10 minutes, cocotb suites 100× slower). Before a long session quit Docker Desktop and any idle servers from other projects; check `sysctl vm.swapusage`.
 - **Local hardening is unreliable**: Docker Desktop's file sharing stalls and kills the engine during heavy I/O (VM memory was raised to 12 GB; a backup of Docker's settings file sits beside it). Treat the GitHub `gds` workflow as the flow of record.
 - Libraries go into virtual environments or `~/ttsetup`, never system-wide (owner's standing preference).
 
-## Lessons from this session about running subagents
+## Lessons about running subagents
 
 - Several agents died when they handed work to a background worker or ended their turn "waiting for a monitor". Tell every agent: do all the work yourself, run long commands in the foreground with a time limit, never wait on notifications.
 - Interrupted agents leave uncommitted partial work. On resume, check `git status` and the ledger before re-dispatching, and tell the next agent to treat the working tree as unverified.
 - Reviews with mutation testing found real gaps every time (inert tests, surviving mutants in the formal properties). Keep asking reviewers to prove a test or property fails when the fix is reverted.
+- Big agents stall when the machine swaps; make every agent write its report file incrementally and commit per group, so a stalled agent can be resumed (SendMessage to its id) or its work finished by hand. Run one agent at a time on this Mac.
 
 ## After this branch: next plans (not written yet)
 

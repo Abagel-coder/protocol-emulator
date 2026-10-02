@@ -11,14 +11,14 @@ The instruction mix below is deliberately wide: reserved/undefined field encodin
 generated on purpose, not avoided, because every RTL/model divergence found by earlier rounds
 of this fuzzer was in a reserved encoding (see tests/test_sim.py and the task-7 report) --
 ALU fn now covers the full 4-bit field (0-15, 11-15 reserved), PIN bank the full 2-bit field
-(0-3, 2-3 reserved), WAIT sub the full defined-plus-reserved range (1-7), BFLAG flag the full
+(0-3, 2-3 reserved), WAIT sub the full defined-plus-reserved range (0-7; WAITT since core v0.1), BFLAG flag the full
 5-bit field (0-31, 3-31 reserved), and the reserved classes LANE and RSV (both all-NOP in v0)
 are generated with random operand bits -- LANE used to be generated with all operand bits zero,
 which let an RTL mutant that made LANE perform PIN-style writes (final-review mutant E10) pass as
 `SET UO, 0x00`.
 
-Two encodings are still excluded entirely and one is restricted -- each because it can make a
-random program stall for very long (or forever) rather than because it's untested; directed
+One encoding is still excluded entirely and two are shaped -- each because it can make a
+random program stall for very long (or park for good) rather than because it's untested; directed
 tests in test_core.py / tests/test_sim.py cover them individually:
   - LDIH: generated only occasionally (about one LDI word in ten) and only with imm8 in {0, 1},
     so every register still holds small values (at most 0x1FF, or arithmetic on those). This
@@ -26,9 +26,19 @@ tests in test_core.py / tests/test_sim.py cover them individually:
     as opposed to the `rt` field below, which only selects which register) from landing near
     65535, while still exercising the hi-byte load path (a mutant that clears the low byte on
     LDIH, task-8 mutant E12, used to be caught by directed tests only).
-  - WAITT (WAIT sub=0): excluded from the sub choices below. WAITT stalls until T == Rn
-    *exactly*; since T is free-running and monotonic, an unlucky Rn makes a random program
-    hang for the rest of the run.
+  - WAITT (WAIT sub=0): generated since core v0.1 made it wrap-safe (it completes once bit 15 of
+    T - Rn is 0). It used to be excluded because v0's equality compare stalled a random program
+    for up to 65,535 ticks whenever Rn had already passed. Now a passed deadline completes at
+    once, and only a deadline up to 32,768 ticks ahead stalls, so WAITT is drawn like the other
+    sub-ops but shaped: with probability 0.8 it comes right after a SETT or ADDT on the same
+    register with a small positive offset (1..32) -- SETT arms a deadline a few ticks ahead
+    (an on-time stall that must release exactly at T == Rn), ADDT moves an earlier deadline or a
+    data value by a few ticks, which in a loop or after other work usually lands behind T (a
+    late WAITT, completing at once) -- and otherwise it waits on an arbitrary register (R0 means
+    deadline 0). Its ignored operand bits [5:0] are random. A deadline far ahead can still stall
+    longer than the program's N_CYCLES budget; then the RTL and the model simply stall together
+    for the rest of it (every cycle is still compared), costing coverage, not correctness or time
+    -- the loop runs exactly N_CYCLES cycles per program either way.
   - HALT (MISC sub=1): excluded from the MISC sub choices below, so programs keep running for
     the full N_CYCLES budget instead of parking early and wasting fuzz coverage. `halted` is
     still compared every cycle alongside the pin trace (see the `got`/`exp` tuples below) --
@@ -87,6 +97,18 @@ Re-measured 2026-09-21 after the generator gained random LANE operands and the o
 (same oracle-only method, 300 programs x 1500 cycles; the extra random draws shift every seed's
 stream, so this is a fresh sample rather than a drift): WAITP completions 58.4% condition /
 41.6% timeout, WAITF 53.6% / 46.4% -- still over the 25%-each target.
+
+Re-measured 2026-10-01 after WAITT joined the mix (same oracle-only method and seeds; WAITT shifts
+every seed's stream again). 300 programs x 1500 cycles: WAITP completions 63.2% condition / 36.8%
+timeout, WAITF 36.4% / 63.6% -- still over the 25%-each target; WAITF zero-tick starts rose to
+23.6%, but 290 of them come from one program (seed 1237) looping on a zero-content timeout register
+(11 programs have any). The default run, 200 programs x 1500 cycles, places 156 WAITT words (135 of
+them armed by a SETT/ADDT on the same register) in 69 programs that execute one, and executes WAITT
+2,227 times: 1,486 late (deadline already passed: completes at once), 705 stalling on a deadline
+ahead (698 released exactly at T == Rn; 7 were still stalled when their program's budget ran out,
+the longest stall being 242 cycles) and 36 with the deadline equal to T. Those late and stalling
+WAITTs are what catch v0's equality rule and an inverted sign (RTL mutants W1/W2, program 1 of the
+default run) here as well as in the directed tests.
 """
 import os, random
 import cocotb
@@ -100,6 +122,8 @@ N_CYCLES   = int(os.environ.get("DIFF_CYCLES", "1500"))
 IMEM_WORDS = 64
 
 def rand_word(rng):
+    """One random instruction as a list of words: one word, or for a WAITT usually two -- the
+    SETT/ADDT that arms its deadline, then the WAITT (see the module docstring)."""
     cls = rng.choices(["LDI", "ALU", "ADDI", "PIN", "SETR", "IN", "WAIT", "TIME", "BR", "JMP", "BPIN", "BFLAG", "HOST", "MISC", "LANE", "RSV"],
                       weights=[10, 12, 6, 12, 6, 5, 10, 6, 6, 3, 4, 2, 2, 2, 1, 1])[0]
     w = D.CLASSES[cls] << 12; r = rng.randrange
@@ -112,9 +136,15 @@ def rand_word(rng):
     elif cls == "SETR": w |= (r(8) << 9) | (r(2) << 8) | (r(8) << 5) | r(16)
     elif cls == "IN":  w |= (r(8) << 9) | (r(4) << 7)
     elif cls == "WAIT":
-        sub = rng.choice([1, 2, 3, 4, 5, 6, 7])                        # DELAY, WAITP, WAITF, WAITL, undefined(5-7); 0=WAITT excluded
+        sub = rng.choice([0, 1, 2, 3, 4, 5, 6, 7])                     # WAITT, DELAY, WAITP, WAITF, WAITL, undefined(5-7)
         w |= sub << 9
-        if sub == 1:
+        if sub == 0:                                                   # WAITT; [5:0] are ignored operand bits, randomised
+            if rng.random() < 0.8:                                     # mostly: armed by SETT/ADDT rd, 1..32 just before it
+                rd = 1 + r(7)
+                arm = (D.CLASSES["TIME"] << 12) | (rd << 9) | (r(2) << 8) | (1 + r(32))
+                return [arm, w | (rd << 6) | r(64)]
+            w |= (r(8) << 6) | r(64)                                   # occasionally: any register as the deadline (R0 = 0)
+        elif sub == 1:
             w |= r(65)                                                 # DELAY imm, capped at 64 (bound stall length)
         else:
             rt = 1 + r(7)                                              # rt reg index 1-7 (never R0 == 65535-tick timeout)
@@ -132,7 +162,14 @@ def rand_word(rng):
     elif cls == "MISC": w |= rng.choice([0, 0, 2, 3, 9])                            # NOP, RET, IRQ, undefined (no HALT: keep programs running)
     elif cls == "LANE": w |= r(4096)                                                # reserved lane class: any lower bits, always a no-op in v0 (RTL mutant E10 made it write pins; all-zero operands hid that)
     elif cls == "RSV": w |= r(4096)                                                 # fully reserved class: any lower bits, always a no-op
-    return w
+    return [w]
+
+def rand_words(rng, n):
+    """Exactly n words from rand_word (a SETT/ADDT + WAITT pair cut by the end keeps only its SETT/ADDT)."""
+    out = []
+    while len(out) < n:
+        out += rand_word(rng)
+    return out[:n]
 
 def preamble_words(rng):
     """First seven words: LDI Rk, v for k=1..7, v in 8..63 (hi=0, rd=k). See the module
@@ -144,7 +181,7 @@ async def rtl_matches_model_on_random_programs(dut):
     cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
     for n in range(N_PROGRAMS):
         rng = random.Random(1000 + n)
-        words = preamble_words(rng) + [rand_word(rng) for _ in range(IMEM_WORDS - 7)]
+        words = preamble_words(rng) + rand_words(rng, IMEM_WORDS - 7)
         for i in range(IMEM_WORDS): dut.u_imem.mem[i].value = words[i]
         dut.prescale.value = 0; dut.run.value = 0; dut.ui_in.value = 0; dut.uio_in.value = 0
         dut.rst_n.value = 0; await ClockCycles(dut.clk, 3); dut.rst_n.value = 1; await ClockCycles(dut.clk, 2)

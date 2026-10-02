@@ -404,14 +404,14 @@ mutants (no brief mutant touches the flags) that prove T1f and the flag tests de
 
 | # | Mutation | Properties that fail | Directed tests that fail |
 |---|---|---|---|
-| W1 | `waitt_done = (t_in == rt_v)` (v0's equality rule) | T1, T1e (step 3); the late-release cover becomes unreachable | `waitt_late_deadline_completes_in_one_cycle`, `waitt_boundary_32768_ahead_waits_exactly`, `waitt_leaves_to_unchanged` |
-| W2 | `waitt_done = waitt_diff[15]` (inverted sign) | T1, T1d, T1e (steps 3-4), T1c (step 5) | the same three |
-| W3 | `waitt_done = !waitt_diff[14]` (window on bit 14) | T1, T1e (step 4), T1c (step 5) | `waitt_late_...` (32,767 behind stalls), `waitt_boundary_...` (32,768 ahead released at once) |
+| W1 | `waitt_done = (t_in == rt_v)` (v0's equality rule) | T1, T1e (step 3); the late-release cover becomes unreachable | `waitt_late_deadline_completes_in_one_cycle`, `waitt_boundary_32768_ahead_waits_exactly`, `waitt_leaves_to_unchanged`; host `run_low_across_deadline_resumes_immediately` (no release within 20 edges of RUN's return); the fuzzer (program 1, cycle 136) |
+| W2 | `waitt_done = waitt_diff[15]` (inverted sign) | T1, T1d, T1e (steps 3-4), T1c (step 5) | the same three; host `run_low_across_...` (released before RUN was ever dropped); the fuzzer (program 1, cycle 17) |
+| W3 | `waitt_done = !waitt_diff[14]` (window on bit 14) | T1, T1e (step 4), T1c (step 5) | `waitt_late_...` (32,767 behind stalls), `waitt_boundary_...` (32,768 ahead released at once); the fuzzer passes (bit 14 and bit 15 of `T - Rn` disagree only for deadlines 16,384..32,767 ticks behind or 16,385..32,768 ahead, which its programs do not produce) |
 | W4 | `timed_to = wait_active ? (t_in == wdead) : (tmo == 16'd1)` | T4c only (step 1) | none directed; the differential fuzzer |
 | W5 | `wdead <= t_in` (timeout dropped) | P4 only (step 4) | `waitp_timeout_and_release`, `r0_timeout_is_65535_ticks`, `waitt_leaves_to_unchanged`; the fuzzer |
 | W6a | a completing `WAITT` clears `TO` | T1f only (step 5) | `waitt_leaves_to_unchanged` (and the oracle's `test_waitt_leaves_to_unchanged` against the same change in `tools/sim.py`) |
 | W6b | a late `WAITT` sets `TO` (the declined miss flag) | T1f only (step 4) | the same |
-| S-W1 | `tools/sim.py`: v0's equality rule in the oracle | -- | pytest: `test_waitt_late_deadline_completes_in_one_cycle`, `test_waitt_boundary_32768_ahead_waits_exactly`, `test_waitt_leaves_to_unchanged` |
+| S-W1 | `tools/sim.py`: v0's equality rule in the oracle | -- | pytest: `test_waitt_late_deadline_completes_in_one_cycle`, `test_waitt_boundary_32768_ahead_waits_exactly`, `test_waitt_leaves_to_unchanged`; the fuzzer against the real RTL (program 1, cycle 136) |
 
 ## Cover witnesses
 

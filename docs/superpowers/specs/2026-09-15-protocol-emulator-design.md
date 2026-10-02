@@ -2,9 +2,9 @@
 
 Date: 2026-09-15 (v0 morning, v1 evening after the prior-art and verification scans in `docs/research/`). Status: **approved by the owner on 2026-09-16** (PLAN.md decision D6). Numbers marked *(estimate)* are superseded by the core v0 hardening result in README.md.
 
-**Implementation status (2026-09-21).** Core v0 is implemented on branch `core-v0` (`src/`, `tools/`, `test/`, `formal/`; hardened at 12,757 cells, 21.39 % of the 6x4 tile). It deviates from this spec in three places, each an open owner decision for the next plan rather than a settled change to the spec:
+**Implementation status (2026-09-21).** Core v0 is implemented on branch `core-v0` (`src/`, `tools/`, `test/`, `formal/`; hardened at 12,757 cells, 21.39 % of the 6x4 tile). It deviated from this spec in three places, each an owner decision rather than a settled change to the spec; the first is resolved on branch `core-v0.1` (2026-10-01), the other two remain open for the next plan:
 
-- §6, first bullet: deadline compares are **equality only** (`WAITT` releases when `T == Rn`; timed waits when `T` equals the captured deadline), not the wrap-safe signed difference. A deadline that has already passed stalls until `T` wraps (documented in `docs/info.md`, "v0 limitations"). Equality is what the deadline-exactness proof (T1 in `formal/README.md`) states.
+- §6, first bullet -- **resolved on `core-v0.1`**: v0 compared deadlines for equality only, so a `WAITT` whose deadline had already passed stalled until `T` wrapped. `WAITT` now uses the wrap-safe signed difference (it completes once bit 15 of `T - Rn` is 0: a deadline up to 32,768 ticks ahead releases exactly at `T == Rn`, a passed one at once, flags untouched; `docs/superpowers/specs/2026-10-01-wrap-safe-deadline-design.md`), proved as T1 and T1c-T1f in `formal/README.md`. Timed waits keep the equality compare on the deadline they capture, which keeps the full 65,535-tick timeout.
 - §8: the instruction memory is a 64 x 16-bit flip-flop array (`src/pe_imem_ff.v`), not the two SRAM macros; addresses alias modulo 64. The macro's power-grid problem on CMOS5L is recorded in `HANDOFF.md` ("next plans").
 - §7: no lanes (pin engines); the LANE instruction class is reserved and executes as a no-op.
 

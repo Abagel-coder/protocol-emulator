@@ -49,13 +49,13 @@ Implications: the design is bigger than the 7–8K-cell estimate, mainly the 64-
 1. **Check CI on the pushed head** (link above). Fix only if something is red.
 2. **Owner decisions** (open unless marked decided; the code documents the current choice):
    - Merge `core-v0` into `main` directly, or open a pull request. Not before asked.
-   - Deadline compare: the spec (§6) asks for a wrap-safe signed window; v0 compares for equality, so a `WAITT` whose deadline `T` has already passed waits a full 65,536-tick wrap (documented in `docs/info.md`, "v0 limitations"). Change the RTL in the lanes plan, or keep it and keep the note.
+   - **Decided 2026-10-01 (owner):** deadline compare made wrap-safe per spec §6 -- a late `WAITT` just continues, flags untouched (a miss flag was declined) -- together with moving the `t_in + tmo` adder off the `adv` path, on branch `core-v0.1` (`docs/superpowers/specs/2026-10-01-wrap-safe-deadline-design.md`).
    - **Decided 2026-10-01 (owner):** the test-only UART reference moved out of `src/` to `test/uart_tx_ref.v` (module `uart_tx_ref`) on branch `core-v0.1`; `src/` now holds exactly the seven `info.yaml` `source_files` plus `isa_defs.vh`.
 3. Then the next plan: lanes (below).
 
 ### Minor findings logged during task reviews (triaged in the whole-branch review)
 
-Status after the fix wave (2026-09-22): fixed -- unused `importlib`; assembler dead code / `max_pc` / `.equ`-`.org`-`.word` error wrapping; `reserved_alu_fn_is_noop` (now rs != rd, checks C); stale HALT comment; post-reset assertion and `running` bit; `sim.py` prescale docstring; `w_rt` decode pinned formally; `IN`/PUSH/POP/CALL/RET/IRQ/WAITL/zero-timeout semantics documented. Deferred to the next plan (owner decisions): `pull_request` trigger (all workflows are push-only by convention); `pe_gpio` OE-clear / pin 7 / `tick` block tests; `alu_valid` comment; `pe_imem_ff` `WORDS = 1 << AW`; `h2c_full` gate; `imem_waddr` increment placement; CS_n hold wording; `cs_start` wire; fuzzer `pc` compare; `uart_tx.s` idle-segment check; the `t_in + tmo` adder on the critical path.
+Status after the fix wave (2026-09-22): fixed -- unused `importlib`; assembler dead code / `max_pc` / `.equ`-`.org`-`.word` error wrapping; `reserved_alu_fn_is_noop` (now rs != rd, checks C); stale HALT comment; post-reset assertion and `running` bit; `sim.py` prescale docstring; `w_rt` decode pinned formally; `IN`/PUSH/POP/CALL/RET/IRQ/WAITL/zero-timeout semantics documented. Deferred to the next plan (owner decisions): `pull_request` trigger (all workflows are push-only by convention); `pe_gpio` OE-clear / pin 7 / `tick` block tests; `alu_valid` comment; `pe_imem_ff` `WORDS = 1 << AW`; `h2c_full` gate; `imem_waddr` increment placement; CS_n hold wording; `cs_start` wire; fuzzer `pc` compare; `uart_tx.s` idle-segment check. (The `t_in + tmo` adder on the critical path was taken off it on `core-v0.1`.)
 
 - `tests/test_gen_isa.py`: unused `importlib` import. `.github/workflows/tools.yaml`: no `pull_request` trigger.
 - `tools/asm.py`: dead pass-2 address-collision check and unused `max_pc`; `.equ` error wrapping inconsistent with the rest.
@@ -77,7 +77,7 @@ Status after the fix wave (2026-09-22): fixed -- unused `importlib`; assembler d
 - Host SPI: mode 0, MSB first, SCK ≤ clk/16, commands 0x01–0x07 (table in `docs/info.md`); status bit4 = host→core FIFO full.
 - `Sim.step()` returns `(cycle, uo, uio_out, uio_oe, halted)`.
 - Generated files (`docs/isa.md`, `tools/isa_defs.py`, `src/isa_defs.vh`) change only via `isa/isa.yaml` + `.venv/bin/python tools/gen_isa.py`; CI fails on drift of those three. The field slices in `src/pe_core.v` are hand-typed and are checked only by the differential fuzzer.
-- The instruction memory is 64 words (addresses and jump targets alias modulo 64; the assembler refuses larger programs; zero-fill before RUN). v0 compares deadlines for equality only: a deadline that `T` has already passed waits for a full wrap (`docs/info.md`, "v0 limitations").
+- The instruction memory is 64 words (addresses and jump targets alias modulo 64; the assembler refuses larger programs; zero-fill before RUN). `WAITT` is wrap-safe (core v0.1): it completes once bit 15 of `T - Rn` is 0 -- a deadline up to 32,768 ticks ahead releases exactly at `T == Rn`, one already passed (up to 32,767 behind) at once, flags untouched; keep deadlines under 32,768 ticks ahead. Timed waits keep the equality compare on the `T + timeout` they capture when they start, so a timeout that passes while RUN is low waits for `T` to come round again (`docs/info.md`).
 
 ## Environment on this Mac
 
@@ -112,7 +112,7 @@ cd formal && sby -f core.sby       # all five tasks
 3. **Protocol firmware + reference models**: UART RX, SPI master/slave, I2C master/slave, then USB low speed and 10BASE-T.
 4. **Verification depth**: MCY mutation score, EQY RTL-vs-netlist equivalence, cocotb-coverage crosses, microcotb replay on the FPGA board, measured AI-assisted property drafting.
 5. **Generate field-slice macros** into `src/isa_defs.vh` (e.g. `ISA_BPIN_LEVEL_MSB/LSB`) and use them in `pe_core.v`, so `gen_isa.py --check` really pins the layout (today only the fuzzer does); also generate the class-count sentence in `docs/info.md`.
-6. **Owner decisions carried over from the whole-branch review**: wrap-safe (signed) deadline compare per spec §6 vs. keeping equality-only (documented as a v0 limitation); moving the `t_in + tmo` adder off the `adv` critical path; merge `core-v0` vs. pull request. (Decided 2026-10-01: the UART timing reference moved from `src/` to `test/uart_tx_ref.v`, branch `core-v0.1`.)
+6. **Owner decisions carried over from the whole-branch review**: merge `core-v0` vs. pull request. (Decided 2026-10-01, branch `core-v0.1`: the wrap-safe `WAITT` deadline compare per spec §6, with the `t_in + tmo` adder moved off the `adv` critical path; the UART timing reference moved from `src/` to `test/uart_tx_ref.v`.)
 
 ## Owner-side items
 

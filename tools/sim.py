@@ -153,7 +153,11 @@ class Sim:
         if cls == C["WAIT"]:
             sub = _f(w, "WAIT", "sub"); W = D.WAIT_SUB
             if sub == W["WAITT"]:
-                if self.T == self.regs[_f(w, "WAIT", "rn")]: self._advance()
+                # Wrap-safe deadline (isa.yaml semantics.waits): complete once bit 15 of (T - Rn) mod 2^16
+                # is 0, i.e. the deadline is not ahead of T. A deadline up to 32,768 ticks ahead completes
+                # exactly at T == Rn (T moves at most one tick per cycle); one already passed (up to 32,767
+                # ticks behind) completes at once. Flags untouched.
+                if ((self.T - self.regs[_f(w, "WAIT", "rn")]) & MASK16) < 0x8000: self._advance()
                 return
             if sub == W["DELAY"]:
                 if self.wait_state is None: self.wait_state = _f(w, "WAIT", "imm9")

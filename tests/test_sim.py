@@ -123,6 +123,84 @@ def test_timebase_t0_wraparound_preserves_waitt_period():
     assert len(p_wrap) >= 8 and all(p == 5 for p in p_wrap)
     assert p0 == p_wrap
 
+# ---- wrap-safe WAITT (isa.yaml semantics.waits; core v0.1): WAITT Rn completes in the first cycle in
+# which bit 15 of (T - Rn) mod 2^16 is 0 -- a deadline 1..32,767 ticks behind T completes at once, one
+# 1..32,768 ticks ahead completes exactly at T == Rn. Flags are untouched.
+
+def waitt_program(delta):
+    """WAITT R1 at address 4, first executing in cycle 4 with R1 == T + delta (mod 2^16): SETT R1, 2 in
+    cycle 2 makes R1 == T(4) (a tick per cycle), then ADD/SUB moves it by |delta| (LDI/LDIH build |delta|
+    in R2). The SET UO, 0x01 at address 5 executes the cycle after the WAITT completes and lands on the
+    pin one cycle later, so a WAITT that completes in its first cycle shows uo == 1 from cycle 6."""
+    mag = abs(delta)
+    return ("LDI R2, %d\nLDIH R2, %d\nSETT R1, 2\n%s R1, R2\nWAITT R1\nSET UO, 0x01\nHALT\nNOP"
+            % (mag & 0xFF, mag >> 8, "ADD" if delta > 0 else "SUB"))
+
+def first_pin_write(tr):
+    """The first trace cycle whose uo reads non-zero (the cycle after the SET executed), or None."""
+    return next((t[0] for t in tr if t[1]), None)
+
+def test_waitt_late_deadline_completes_in_one_cycle():
+    # Deadlines 1, 300 and 32,767 ticks behind T when WAITT first executes: each completes in that one
+    # cycle (cycle 4), so the SET after it executes in cycle 5 and is on the pin from cycle 6. Under the
+    # v0 equality rule each would stall until T wrapped round to Rn (65,536 - d ticks). T's absolute value
+    # does not matter (three starting values, including one where R1 wraps below 0).
+    for t0 in (0, 0x8000, 0xFFFE):
+        for d in (1, 300, 32767):
+            s = Sim(assemble(waitt_program(-d)), t0=t0); tr = s.run(12)
+            assert first_pin_write(tr) == 6, (t0, d, [t[1] for t in tr])
+            assert s.halted, (t0, d)
+
+def test_waitt_boundary_32768_ahead_waits_exactly():
+    # 32,768 ticks ahead is the farthest deadline WAITT still treats as ahead: bit 15 of T - Rn is 1
+    # (T - Rn == 0x8000), so it stalls and completes exactly when T == Rn, in cycle 4 + 32,768; the SET
+    # follows in cycle 32,773 and is on the pin from cycle 32,774 -- not one cycle earlier or later.
+    for t0 in (0, 0xFFFE):
+        s = Sim(assemble(waitt_program(32768)), t0=t0); tr = s.run(4 + 32768 + 6)
+        assert first_pin_write(tr) == 4 + 32768 + 2, (t0, first_pin_write(tr))
+    # 32,769 ticks ahead is indistinguishable from 32,767 behind (T - Rn == 0x7FFF): it completes at once.
+    s = Sim(assemble(waitt_program(32769))); tr = s.run(12)
+    assert first_pin_write(tr) == 6, [t[1] for t in tr]
+
+# TO = 1 (from a timed-out WAITF), then TO = 0 (from a WAITF that completes on its flag); in each state a
+# late WAITT (deadline one tick behind) and an on-time one (two ticks ahead) must leave TO as it was.
+# Observed with BTO: each check skips a failure marker, or branches to one, on the TO it expects; success
+# leaves exactly 0x01 on uo. Shared with test/test_core.py's waitt_leaves_to_unchanged.
+WAITT_TO_PROGRAM = """
+        LDI   R3, 2
+        WAITF RXV, R3        ; nothing queued: times out after 2 ticks, TO = 1
+        SETT  R1, 0          ; R1 = T now: one tick behind when the WAITT executes
+        WAITT R1             ; late: completes in its first cycle
+        BTO   a              ; TO still 1: taken
+        NOP
+        SET   UO, 0x02       ; reached only if the late WAITT cleared TO
+a:      SETT  R1, 3          ; two ticks ahead of the WAITT's first cycle
+        WAITT R1             ; on time: completes when T == R1
+        BTO   b
+        NOP
+        SET   UO, 0x04       ; reached only if the on-time WAITT cleared TO
+b:      WAITF TXE, R3        ; core->host FIFO empty: completes at once, TO = 0
+        SETT  R1, 0
+        WAITT R1             ; late
+        BTO   bad            ; TO still 0: not taken
+        NOP
+        SETT  R1, 3
+        WAITT R1             ; on time
+        BTO   bad
+        NOP
+        SET   UO, 0x01       ; success
+        HALT
+        NOP
+bad:    SET   UO, 0x08       ; reached only if a WAITT set TO
+        HALT
+        NOP
+"""
+
+def test_waitt_leaves_to_unchanged():
+    s = Sim(assemble(WAITT_TO_PROGRAM)); tr = s.run(40)
+    assert s.halted and tr[-1][1] == 0x01, [t[1] for t in tr]
+    assert s.flags["TO"] == 0
+
 def test_uart_tx_firmware_bit_timing():
     s = Sim(assemble((FIRMWARE / "uart_tx.s").read_text()), prescale=2); tr = s.run(11 * 434 + 20)
     tx = [t[1] & 1 for t in tr]

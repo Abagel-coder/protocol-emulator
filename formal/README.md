@@ -64,7 +64,9 @@ assumed".
   For an on-time deadline (at most 32,768 ticks ahead when the `WAITT` first executes) these give
   v0's guarantee unchanged: no release while the deadline is ahead (T1e, T1), release in the cycle
   `T == Rn` (T1d), and after a stall only then (T1c). A deadline already behind `T` by 1..32,767
-  ticks -- an overrun loop, or RUN held low across it -- releases in its first cycle (T1e).
+  ticks releases at once: in the `WAITT`'s first cycle after an overrun loop body (T1e), or, for a
+  `WAITT` that was stalled when RUN dropped and whose deadline `T` passed meanwhile, in the first
+  active cycle after RUN returns (T1).
 - **T1b** (`src/pe_core.v`, spec-pinning restatement stated on the port bits):
   `rt_v == (imem_data[8:6] == 0) ? 0 : regs[imem_data[8:6]]` -- ties the RTL's `rt_v` (the `Rn` of its
   `WAITT` compare) to the register named by the instruction word's own `rt` field (`isa.yaml`

@@ -50,7 +50,7 @@ Implications: the design is bigger than the 7–8K-cell estimate, mainly the 64-
 2. **Owner decisions** (open unless marked decided; the code documents the current choice):
    - Merge `core-v0` into `main` directly, or open a pull request. Not before asked.
    - **Decided 2026-10-01 (owner):** deadline compare made wrap-safe per spec §6 -- a late `WAITT` just continues, flags untouched (a miss flag was declined) -- together with moving the `t_in + tmo` adder off the `adv` path, on branch `core-v0.1` (`docs/superpowers/specs/2026-10-01-wrap-safe-deadline-design.md`).
-   - **Decided 2026-10-01 (owner):** the test-only UART reference moved out of `src/` to `test/uart_tx_ref.v` (module `uart_tx_ref`) on branch `core-v0.1`; `src/` now holds exactly the seven `info.yaml` `source_files` plus `isa_defs.vh`.
+   - **Decided 2026-10-01 (owner):** the test-only UART reference moved out of `src/` to `test/uart_tx_ref.v` (module `uart_tx_ref`) on branch `core-v0.1`; `src/` now holds only chip files: the seven `info.yaml` `source_files`, `isa_defs.vh` and the flow's `config.json`.
 3. Then the next plan: lanes (below).
 
 ### Minor findings logged during task reviews (triaged in the whole-branch review)

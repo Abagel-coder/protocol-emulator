@@ -16,7 +16,7 @@ Written 2026-09-18, updated 2026-09-22 after the whole-branch review and its fix
 | Research: brief, prior art, verification, novelty decisions N1–N10 | `docs/research/` |
 | ISA source of truth and generated reference | `isa/isa.yaml`, `docs/isa.md` |
 | Tools: generator, assembler, cycle-accurate oracle, host encoders | `tools/gen_isa.py`, `tools/asm.py`, `tools/sim.py`, `tools/host.py` |
-| RTL | `src/project.v` (top), `src/pe_core.v`, `pe_gpio.v`, `pe_timebase.v`, `pe_imem_ff.v`, `pe_fifo.v`, `pe_host_spi.v`; `src/uart_tx.v` is only a timing reference |
+| RTL | `src/project.v` (top), `src/pe_core.v`, `pe_gpio.v`, `pe_timebase.v`, `pe_imem_ff.v`, `pe_fifo.v`, `pe_host_spi.v` (exactly `info.yaml`'s `source_files`); the warm-up UART kept as a timing reference is test-only and lives in `test/uart_tx_ref.v` |
 | Firmware | `firmware/blink.s`, `firmware/uart_tx.s` |
 | Tests | `tests/` (pytest), `test/` (cocotb: `Makefile` = host/top level, `Makefile.core`, `Makefile.blocks`, `Makefile.uartfw`) |
 | Formal proofs and their honest scope | `formal/core.sby`, `formal/core_props.v`, `formal/timebase_props.v`, `formal/README.md` |
@@ -47,10 +47,10 @@ Implications: the design is bigger than the 7–8K-cell estimate, mainly the 64-
 ## What is left on this branch (in order)
 
 1. **Check CI on the pushed head** (link above). Fix only if something is red.
-2. **Owner decisions** (nothing here is decided; the code documents the current choice):
+2. **Owner decisions** (open unless marked decided; the code documents the current choice):
    - Merge `core-v0` into `main` directly, or open a pull request. Not before asked.
    - Deadline compare: the spec (§6) asks for a wrap-safe signed window; v0 compares for equality, so a `WAITT` whose deadline `T` has already passed waits a full 65,536-tick wrap (documented in `docs/info.md`, "v0 limitations"). Change the RTL in the lanes plan, or keep it and keep the note.
-   - `src/uart_tx.v` stays in `src/` as a documented test-only reference (not in `info.yaml` `source_files`), or moves to `test/`.
+   - **Decided 2026-10-01 (owner):** the test-only UART reference moved out of `src/` to `test/uart_tx_ref.v` (module `uart_tx_ref`) on branch `core-v0.1`; `src/` now holds exactly the seven `info.yaml` `source_files` plus `isa_defs.vh`.
 3. Then the next plan: lanes (below).
 
 ### Minor findings logged during task reviews (triaged in the whole-branch review)
@@ -112,7 +112,7 @@ cd formal && sby -f core.sby       # all five tasks
 3. **Protocol firmware + reference models**: UART RX, SPI master/slave, I2C master/slave, then USB low speed and 10BASE-T.
 4. **Verification depth**: MCY mutation score, EQY RTL-vs-netlist equivalence, cocotb-coverage crosses, microcotb replay on the FPGA board, measured AI-assisted property drafting.
 5. **Generate field-slice macros** into `src/isa_defs.vh` (e.g. `ISA_BPIN_LEVEL_MSB/LSB`) and use them in `pe_core.v`, so `gen_isa.py --check` really pins the layout (today only the fuzzer does); also generate the class-count sentence in `docs/info.md`.
-6. **Owner decisions carried over from the whole-branch review**: wrap-safe (signed) deadline compare per spec §6 vs. keeping equality-only (documented as a v0 limitation); moving the `t_in + tmo` adder off the `adv` critical path; keeping `src/uart_tx.v` in `src/` as a documented exception vs. moving it to `test/`; merge `core-v0` vs. pull request.
+6. **Owner decisions carried over from the whole-branch review**: wrap-safe (signed) deadline compare per spec §6 vs. keeping equality-only (documented as a v0 limitation); moving the `t_in + tmo` adder off the `adv` critical path; merge `core-v0` vs. pull request. (Decided 2026-10-01: the UART timing reference moved from `src/` to `test/uart_tx_ref.v`, branch `core-v0.1`.)
 
 ## Owner-side items
 

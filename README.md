@@ -14,7 +14,7 @@ An open-source programmable protocol-emulator CPU for IHP 130 nm SG13CMOS5L via 
 
 | Date | Milestone |
 |---|---|
-| 2026-09-15 | Repo scaffolded from the `cmos5l` template; fixed 8N1 UART transmitter (`src/uart_tx.v`) with cycle-exact cocotb tests (3/3 passing locally on Icarus) as the warm-up block; local toolchain installed and verified |
+| 2026-09-15 | Repo scaffolded from the `cmos5l` template; fixed 8N1 UART transmitter (then in `src/`, now the test-only reference `test/uart_tx_ref.v`) with cycle-exact cocotb tests (3/3 passing locally on Icarus) as the warm-up block; local toolchain installed and verified |
 | 2026-09-18 | **Core v0 complete and hardened.** ISA (`isa/isa.yaml`) generates the assembler, Python simulator and Verilog decode constants; `pe_core`/`pe_timebase`/`pe_gpio`/`pe_fifo`/`pe_imem_ff` wired to a host SPI loader (`pe_host_spi`) on the Tiny Tapeout pins; differential fuzzer (RTL vs Python model) and a cycle-accurate UART-firmware equivalence test both pass; core properties (deadline exactness, static timing, reset safety, RUN synchronisation) proved with SymbiYosys; hardened for IHP SG13CMOS5L via the GitHub `gds` flow, gate-level simulation green. Next: lanes (pin engines) |
 
 ## Results
@@ -29,10 +29,10 @@ Measured library data from the warm-up run: a reset flip-flop (`sg13cmos5l_dfrbp
 ## Layout
 
 ```
-src/        Verilog sources (list every file in info.yaml and test/Makefile) — except
-            src/uart_tx.v, the warm-up fixed-function UART kept only as the timing
-            reference for test/Makefile.uartfw; it is deliberately absent from
-            info.yaml source_files and is never synthesised
+src/        Verilog sources of the chip (list every file in info.yaml and test/Makefile);
+            the warm-up fixed-function UART, kept only as the timing reference for
+            test/Makefile.uartfw, lives in test/ (test/uart_tx_ref.v) and is never
+            synthesised
 isa/        isa.yaml — the single source of truth for the ISA; generates the assembler,
             the Python simulator's decode table, src/isa_defs.vh and docs/isa.md
             (tools/gen_isa.py --check pins the enumerations, mnemonic table and the

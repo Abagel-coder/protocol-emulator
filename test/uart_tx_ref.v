@@ -2,15 +2,16 @@
  * Copyright (c) 2026 anbaghel
  * SPDX-License-Identifier: Apache-2.0
  *
- * Warm-up block: fixed-function 8N1 UART transmitter driving one pin.
- * This is step one of the competition advice ("start with a UART transmitter
- * out of a pin, then make it programmable"). It exists to prove the
- * design -> cocotb -> synthesis -> harden loop end to end and to serve as a
- * timing reference for the firmware version that replaces it.
+ * Reference model, test-only: fixed-function 8N1 UART transmitter driving one pin.
+ * It began as the warm-up block (step one of the competition advice, "start with a
+ * UART transmitter out of a pin, then make it programmable"; as module uart_tx in
+ * src/ it proved the design -> cocotb -> synthesis -> harden loop end to end) and is
+ * now kept only as the cycle-accurate timing reference for the firmware version that
+ * replaced it. It lives in test/, is not part of the chip (not in info.yaml's
+ * source_files, never synthesised) and is compiled only by test/Makefile.uartfw.
  *
  * Timing contract (checked by test/test_uart_fw.py via test/Makefile.uartfw, which compares
- * this transmitter's frame cycle for cycle against firmware/uart_tx.s running on the core;
- * this file is a test-only reference and is not in info.yaml's source_files):
+ * this transmitter's frame cycle for cycle against firmware/uart_tx.s running on the core):
  *   - `start` is level-sensitive and sampled only while idle.
  *   - The start bit appears on `tx` on the clock edge after `start` is sampled.
  *   - Every bit (start, d0..d7 LSB first, stop) is held for exactly CLKS_PER_BIT cycles.
@@ -19,7 +20,7 @@
 
 `default_nettype none
 
-module uart_tx #(
+module uart_tx_ref #(
     parameter integer CLKS_PER_BIT = 434  // 50 MHz / 115200 baud = 434.03
 ) (
     input  wire       clk,

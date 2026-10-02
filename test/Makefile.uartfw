@@ -1,33 +1,32 @@
 # Makefile.uartfw
 # See https://docs.cocotb.org/en/stable/quickstart.html for more info
 #
-# Derived from test/Makefile: same seven core sources plus uart_tx.v (the fixed-function
-# transmitter used as a cycle-accurate reference in tb_uartfw.v), tb_uartfw.v instead of
-# tb.v, and test_uart_fw instead of test_host. uart_tx.v stays out of test/Makefile's
-# PROJECT_SOURCES -- it is only ever pulled in here.
+# Derived from test/Makefile: the same seven core sources from src/, plus the test-only
+# reference transmitter test/uart_tx_ref.v (module uart_tx_ref, the fixed-function 8N1 UART
+# used as a cycle-accurate reference in tb_uartfw.v; not part of the chip, so it lives in
+# test/ and is compiled beside the testbench), tb_uartfw.v instead of tb.v, and test_uart_fw
+# instead of test_host.
 
 # defaults
 SIM ?= icarus
 FST ?= -fst # Use more efficient FST format
 TOPLEVEL_LANG ?= verilog
 SRC_DIR = $(PWD)/../src
-PROJECT_SOURCES = project.v pe_timebase.v pe_gpio.v pe_imem_ff.v pe_fifo.v pe_core.v pe_host_spi.v uart_tx.v
+PROJECT_SOURCES = project.v pe_timebase.v pe_gpio.v pe_imem_ff.v pe_fifo.v pe_core.v pe_host_spi.v
 
 # Make tools.* importable from cocotb test modules:
 export PYTHONPATH := $(PWD)/..
 
-# RTL simulation only. There is no gate-level (GATES=yes) variant of this Makefile: the
-# flattened top-level netlist contains none of the sub-modules tb_uartfw.v instantiates, so
-# that build cannot succeed. Gate-level simulation is test/Makefile (test_host), which
-# drives only the top-level pins.
+# RTL simulation only: there is no gate-level (GATES=yes) variant of this Makefile.
+# Gate-level simulation is test/Makefile (test_host), which drives only the top-level pins.
 SIM_BUILD				= sim_build/rtl
 VERILOG_SOURCES += $(addprefix $(SRC_DIR)/,$(PROJECT_SOURCES))
 
 # Allow sharing configuration between design and testbench via `include`:
 COMPILE_ARGS 		+= -I$(SRC_DIR)
 
-# Include the testbench sources:
-VERILOG_SOURCES += $(PWD)/tb_uartfw.v
+# Include the testbench sources (the reference transmitter is test-only, beside the testbench):
+VERILOG_SOURCES += $(PWD)/uart_tx_ref.v $(PWD)/tb_uartfw.v
 TOPLEVEL = tb_uartfw
 
 # List test modules to run, separated by commas and without the .py suffix:

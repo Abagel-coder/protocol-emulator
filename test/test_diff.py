@@ -28,9 +28,10 @@ tests in test_core.py / tests/test_sim.py cover them individually:
     LDIH, task-8 mutant E12, used to be caught by directed tests only).
   - WAITT (WAIT sub=0): generated since core v0.1 made it wrap-safe (it completes once bit 15 of
     T - Rn is 0). It used to be excluded because v0's equality compare stalled a random program
-    for up to 65,535 ticks whenever Rn had already passed. Now a passed deadline completes at
-    once, and only a deadline up to 32,768 ticks ahead stalls, so WAITT is drawn like the other
-    sub-ops but shaped: with probability 0.8 it comes right after a SETT or ADDT on the same
+    for up to 65,535 ticks whenever Rn had already passed. Now a deadline up to 32,767 ticks
+    behind completes at once and only one up to 32,768 ticks ahead stalls (a deadline further
+    behind than 32,767 counts as ahead), so WAITT is drawn like the other sub-ops but
+    shaped: with probability 0.8 it comes right after a SETT or ADDT on the same
     register with a small positive offset (1..32) -- SETT arms a deadline a few ticks ahead
     (an on-time stall that must release exactly at T == Rn), ADDT moves an earlier deadline or a
     data value by a few ticks, which in a loop or after other work usually lands behind T (a

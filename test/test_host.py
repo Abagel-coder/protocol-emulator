@@ -422,8 +422,9 @@ async def write_ctrl_run0_stops_core_and_run1_resumes(dut):
 @cocotb.test()
 async def run_low_across_deadline_resumes_immediately(dut):
     """isa.yaml semantics.waits (core v0.1): WAITT is wrap-safe, so a deadline that T passes while
-    RUN is held low -- T free-runs, the paused core does not -- has simply passed when RUN returns,
-    and the WAITT completes in its first active cycle. Under v0's equality rule (RTL mutant W1) it
+    RUN is held low -- T free-runs, the paused core does not -- has simply passed when RUN returns
+    within 32,767 ticks of it (a longer pause can make it count as ahead again), and the WAITT
+    completes in its first active cycle. Under v0's equality rule (RTL mutant W1) it
     stalled until T wrapped round to the deadline again, ~64,000 clocks later.
     The program arms a deadline 400 ticks after its first instruction (398 ahead when the WAITT
     first runs; prescale is 0 after reset, a tick per clock) and waits on it. RUN, the pin, starts

@@ -66,7 +66,8 @@ assumed".
   `T == Rn` (T1d), and after a stall only then (T1c). A deadline already behind `T` by 1..32,767
   ticks releases at once: in the `WAITT`'s first cycle after an overrun loop body (T1e), or, for a
   `WAITT` that was stalled when RUN dropped and whose deadline `T` passed meanwhile, in the first
-  active cycle after RUN returns (T1).
+  active cycle after RUN returns (T1) -- provided `T` is then still within those 32,767 ticks; a
+  longer pause can make the deadline count as ahead again (see H1 below).
 - **T1b** (`src/pe_core.v`, spec-pinning restatement stated on the port bits):
   `rt_v == (imem_data[8:6] == 0) ? 0 : regs[imem_data[8:6]]` -- ties the RTL's `rt_v` (the `Rn` of its
   `WAITT` compare) to the register named by the instruction word's own `rt` field (`isa.yaml`
@@ -134,7 +135,7 @@ spec's 4/5. The mapping, and what is actually proved on this branch:
 
 | Spec §6 | Statement (abridged) | Here | Status (core v0.1) |
 |---|---|---|---|
-| 1 | `WAITT` releases in the cycle `T == Rn`; deadline compares are wrap-safe (signed difference, deadline up to 32,767 ticks ahead) | T1, T1b, T1c, T1d, T1e, T1f | **proved** (k-induction) for the wrap-safe rule: release iff `T - Rn` mod 2^16 < 32768 (T1), exactly at `T == Rn` after a stall (T1c, under its two hypotheses) and never past it while active (T1d), a passed deadline released at once (T1e), flags untouched (T1f); T1b pins the `rn` field on the port bits. (v0 proved the equality-only rule. The spec allows deadlines up to 32,767 ticks ahead; the ISA rule also treats exactly 32,768 ahead as ahead.) |
+| 1 | `WAITT` releases in the cycle `T == Rn`; deadline compares are wrap-safe (signed difference, deadline up to 32,767 ticks ahead) | T1, T1b, T1c, T1d, T1e, T1f | **proved** (k-induction) for the wrap-safe rule: release iff `T - Rn` mod 2^16 < 32768 (T1), exactly at `T == Rn` after a stall (T1c, under its two hypotheses) and never past it while active (T1d), a deadline 1..32,767 ticks behind `T` released in the `WAITT`'s first cycle (T1e), flags untouched (T1f); T1b pins the `rn` field on the port bits. (v0 proved the equality-only rule. The spec allows deadlines up to 32,767 ticks ahead; the ISA rule also treats exactly 32,768 ahead as ahead.) |
 | 2 | every non-wait instruction advances `PC` every cycle; latency depends only on the opcode | T2a, T2b | **proved**: T2a (one-cycle completion, a restatement of `assign adv`), T2b (the successor address, independent) |
 | 3 | `uio_oe == 0` from reset until the first `OE` executes | T3 (grant mask), T3b/T3c | **proved**, and stronger than stated: only bits granted by an executed OE-set can ever be on |
 | 4 | each pin output changes at most once per cycle and only as the result of an executed pin instruction (or a lane) | T5c (outputs stable while `!active`) | **partially proved**: "at most once per cycle" holds by construction (one registered write per cycle) and quiescence while inactive is T5c, but "only as the result of an executed pin instruction" is not stated as a property (`uo_out/uio_out/uio_oe change ⇒ $past(wr_en \|\| pin_en)` would close it; not attempted) |
@@ -259,8 +260,13 @@ exactly three hypotheses about the environment beyond what facts 1-3 state:
   `en == 1` (unconditional counting) assumption rather than inheriting the main proof's free
   `run`. (A timed-wait deadline that `T` passes while RUN is low is then missed until `T` comes
   round to it again, up to 65,536 ticks later -- see the caveats in `docs/info.md`. A `WAITT`
-  differs since core v0.1: its deadline is then behind `T`, and it completes in the first active
-  cycle after the resume, T1.)
+  differs since core v0.1, provided RUN returns within 32,767 ticks of its deadline -- precisely,
+  provided `T` is at most 32,767 ticks past the deadline in the first active cycle after the
+  resume: `T - Rn` mod 2^16 is then below 32,768, and T1 says the `WAITT` completes in that cycle.
+  After a longer pause `T - Rn` mod 2^16 can be 32,768 or more again: the deadline then counts as
+  ahead, T1 says the `WAITT` does not complete while it does, and it waits up to 32,768 ticks for
+  `T` to reach it -- released exactly at `T == Rn` (T1c); that `T` gets there is an argument, see
+  "What is NOT proved".)
 - **H2: `prescale` must not be reprogrammed while the wait is outstanding.** Fact 3 is proved
   for a single fixed `prescale` (`(* anyconst *)`); if firmware changes `prescale` mid-wait the
   tick period changes too, and the "revisits every value within 65536 ticks" argument (which
@@ -306,10 +312,12 @@ judged out of scope.
 - **A `WAITT`'s eventual release is an argument, not a theorem** (like T4's bound). A deadline up
   to 32,768 ticks ahead stalls until `T` reaches it; T1/T1c/T1d say what happens in that cycle and
   the timebase tasks that `T` keeps counting, but no single property says the release happens --
-  it carries H1 (the core stays active; if it does not, the `WAITT` releases at the first active
-  cycle once `T` has passed the deadline, T1) and H2. T1c also carries the hypotheses listed under
-  "Hypotheses of T1c". A deadline 32,769..65,535 ticks ahead releasing at once is the ISA rule
-  (indistinguishable from a passed deadline), not a gap.
+  it carries H1 (the core stays active; a `WAITT` whose deadline `T` passes while RUN is low
+  completes in the first active cycle after RUN returns only provided `T` is then at most 32,767
+  ticks past the deadline, T1 -- after a longer pause the deadline can count as ahead again and
+  the `WAITT` waits up to 32,768 more ticks for `T` to reach it, see H1) and H2. T1c also carries
+  the hypotheses listed under "Hypotheses of T1c". A deadline 32,769..65,535 ticks ahead releasing
+  at once is the ISA rule (indistinguishable from a passed deadline), not a gap.
 - **The 65536-tick bound is bounded-hypothesis, not unconditional** -- see "T4's bound: what's
   proved vs. argued" immediately above: it additionally requires the core to stay active and
   `prescale` to stay fixed for the duration of the wait, and it is an argument composed from

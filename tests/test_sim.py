@@ -201,6 +201,66 @@ def test_waitt_leaves_to_unchanged():
     assert s.halted and tr[-1][1] == 0x01, [t[1] for t in tr]
     assert s.flags["TO"] == 0
 
+# A WAITT that stalls across T's wrap. T starts at 0xFFF8; SETT R1, 0 (cycle 0) and ADDT R1, 12 (cycle 1)
+# put the deadline at 0x0004, four ticks past the wrap. The WAITT first executes in cycle 2 with T = 0xFFFA,
+# ten ticks ahead of its deadline, so it must stall while T runs 0xFFFA..0xFFFF, 0 (cycle 8), 1, 2, 3 and
+# complete exactly in cycle 12, when T == R1 == 4; the SET after it executes in cycle 13 and is on the pin
+# from cycle 14. An unsigned compare that ignores the wrap (T >= Rn) releases it at once, in cycle 2; one
+# that is wrap-safe only in the WAITT's first cycle releases it in cycle 3. Shared with test/test_core.py's
+# waitt_stall_across_T_wrap_releases_at_deadline.
+WAITT_WRAP_PROGRAM = "SETT R1, 0\nADDT R1, 12\nWAITT R1\nSET UO, 0x01\nHALT\nNOP"
+WAITT_WRAP_T0 = 0xFFF8
+
+def test_waitt_stall_across_T_wrap_releases_at_deadline():
+    s = Sim(assemble(WAITT_WRAP_PROGRAM), t0=WAITT_WRAP_T0)
+    tr = s.run(12)                                              # cycles 0..11: T 0xFFF8..0x0003
+    assert s.regs[1] == 0x0004 and s.T == 0x0004, (s.regs[1], s.T)   # s.T is T in cycle 12
+    assert s.pc == 2 and not s.halted                           # still on the WAITT after the wrap
+    tr += [s.step()]                                            # cycle 12: T == Rn, completes
+    assert s.pc == 3
+    tr += s.run(4)
+    assert first_pin_write(tr) == 14, [t[1] for t in tr]
+
+# Zero timeout (isa.yaml semantics.waits): "If Rt's value is 0 the wait completes in its first cycle: TO = 0
+# if the condition is already true, else TO = 1." The timeout register is R3 loaded with 0 (Rt = R0 would
+# mean 65535). Each program runs a condition-false wait first (WAITF RXV: nothing queued; WAITP HIGH on
+# ui[0], which is low), which must time out in its first cycle and set TO, then a condition-true one (WAITF
+# TXE: the core->host FIFO is empty; WAITP LOW on ui[0]), which must complete in its first cycle and clear
+# TO. BTO checks each TO, and each check is followed by a TGL of uo[0]: with every wait taking exactly one
+# cycle uo[0] reads 1 in cycles 5-8 and 0 again from cycle 9. A first-cycle timeout that is missed stalls
+# the wait until T comes round to the captured deadline again, 65,536 ticks later; a wrong TO puts a failure
+# marker (0x40 or 0x20) on uo. Shared with test/test_core.py's zero_timeout_completes_in_first_cycle.
+ZERO_TIMEOUT_WAITS = {"WAITF": ("WAITF RXV, R3", "WAITF TXE, R3"),
+                      "WAITP": ("WAITP UI, 0, HIGH, R3", "WAITP UI, 0, LOW, R3")}
+
+def zero_timeout_program(kind):
+    false_wait, true_wait = ZERO_TIMEOUT_WAITS[kind]
+    return """
+        LDI   R3, 0          ; the timeout register holds 0
+        {f:20} ; cycle 1: condition false -> times out in this cycle, TO = 1
+        BTO   a              ; cycle 2: taken
+        NOP
+        SET   UO, 0x40       ; reached only if the wait left TO at 0
+a:      TGL   UO, 0x01       ; cycle 4: uo[0] = 1 from cycle 5
+        {t:20} ; cycle 5: condition already true -> completes in this cycle, TO = 0
+        BTO   bad            ; cycle 6: not taken
+        NOP
+        TGL   UO, 0x01       ; cycle 8: uo[0] = 0 from cycle 9
+        HALT
+        NOP
+bad:    SET   UO, 0x20       ; reached only if the wait left TO at 1
+        HALT
+        NOP
+""".format(f=false_wait, t=true_wait)
+
+ZERO_TIMEOUT_UO = [0] * 5 + [1] * 4 + [0] * 3                   # uo in cycles 0..11
+
+def test_zero_timeout_completes_in_first_cycle():
+    for kind in ZERO_TIMEOUT_WAITS:
+        s = Sim(assemble(zero_timeout_program(kind))); tr = s.run(12)
+        assert [t[1] for t in tr] == ZERO_TIMEOUT_UO, (kind, [t[1] for t in tr])
+        assert s.halted and s.flags["TO"] == 0, kind
+
 def test_uart_tx_firmware_bit_timing():
     s = Sim(assemble((FIRMWARE / "uart_tx.s").read_text()), prescale=2); tr = s.run(11 * 434 + 20)
     tx = [t[1] & 1 for t in tr]

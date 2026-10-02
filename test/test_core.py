@@ -3,7 +3,9 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge
 from tools.asm import assemble, assemble_file
-from tests.test_sim import WAITT_TO_PROGRAM, waitt_program   # the same programs the oracle's tests run
+from tests.test_sim import (WAITT_TO_PROGRAM, waitt_program,   # the same programs the oracle's tests run
+                            WAITT_WRAP_PROGRAM, WAITT_WRAP_T0, ZERO_TIMEOUT_WAITS, ZERO_TIMEOUT_UO,
+                            zero_timeout_program)
 
 FIRMWARE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "firmware")
 
@@ -273,6 +275,44 @@ async def waitt_leaves_to_unchanged(dut):
     await boot(dut, WAITT_TO_PROGRAM); tr = await trace(dut, 40)
     assert int(dut.halted.value) == 1 and tr[-1][0] == 0x01, [t[0] for t in tr]
     assert (int(dut.flags.value) >> 2) & 1 == 0
+
+@cocotb.test()
+async def waitt_stall_across_T_wrap_releases_at_deadline(dut):
+    """A WAITT that stalls across T's 0xFFFF -> 0 wrap releases exactly at T == Rn. tests/test_sim.py's
+    WAITT_WRAP_PROGRAM, run by the oracle from t0 = 0xFFF8: SETT/ADDT put the deadline at 0x0004, the WAITT
+    first executes in cycle 2 with T = 0xFFFA (ten ticks ahead), stalls across the wrap and completes in
+    cycle 12 (T == 4), so uo reads 1 from cycle 14. This harness's T reads 0 in cycle 0 (tb_core.v), so the
+    test writes 0xFFF8 into the timebase's T register (u_tb.t_out) during cycle 0, before the first edge
+    that samples it; T then counts on by itself, and the T trace is asserted so a write that did not land
+    fails here instead of passing vacuously. A compare that ignores the wrap (t_in >= rt_v) releases the
+    WAITT at once, in cycle 2; one that is wrap-safe only in a WAITT's first cycle and compares a stalled
+    WAITT unsigned releases it in cycle 3, which the rest of this suite, the fuzzer included, misses."""
+    await boot(dut, WAITT_WRAP_PROGRAM)
+    dut.u_tb.t_out.value = WAITT_WRAP_T0
+    uo = []; t = []
+    for _ in range(16):
+        await FallingEdge(dut.clk)
+        uo.append(int(dut.uo_out.value)); t.append(int(dut.t_out.value))
+    assert t == [(WAITT_WRAP_T0 + k) & 0xFFFF for k in range(16)], [hex(v) for v in t]
+    assert first_nonzero(uo) == 14, uo
+    assert int(dut.halted.value) == 1
+
+@cocotb.test()
+async def zero_timeout_completes_in_first_cycle(dut):
+    """isa.yaml semantics.waits: a timed wait whose timeout register holds 0 completes in its first cycle,
+    TO = 1 if its condition is false and TO = 0 if it is already true -- the first-cycle half of timed_to
+    (tmo == 0) that core v0.1 rewrote. tests/test_sim.py's zero_timeout_program, for WAITF and WAITP: a
+    condition-false wait then a condition-true one, both on R3 = 0 (not R0, which means 65535), each
+    checked with BTO and followed by a TGL of uo[0], so uo reads exactly ZERO_TIMEOUT_UO (1 in cycles 5-8)
+    when each wait takes one cycle with the right TO. RTL mutants A (no first-cycle timeout) and W4
+    (tmo == 1) stall the condition-false wait until T wraps round to its deadline; a TO of 1 when the
+    condition and the timeout coincide puts the 0x20 marker on uo. ui_in is driven low first: an earlier
+    test leaves ui[0] high, and the WAITP conditions read it."""
+    dut.ui_in.value = 0
+    for kind in ZERO_TIMEOUT_WAITS:
+        await boot(dut, zero_timeout_program(kind)); tr = await trace(dut, 12)
+        assert [v[0] for v in tr] == ZERO_TIMEOUT_UO, (kind, [v[0] for v in tr])
+        assert int(dut.halted.value) == 1 and (int(dut.flags.value) >> 2) & 1 == 0, kind
 
 @cocotb.test()
 async def host_fifo_push_pop(dut):

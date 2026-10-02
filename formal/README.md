@@ -231,7 +231,8 @@ The 65536-tick bound is the composition of four proved facts:
    complete still has `wait_active` set the next cycle. Facts 1 and 1a together are what make
    "the deadline is frozen for the whole stall" true: fact 1 alone only speaks about cycles in
    which `wait_active` happens to be set, and a core that dropped `wait_active` every other
-   cycle -- re-capturing `wdead` from the current T each time (`dead_now`) -- satisfied facts
+   cycle -- re-capturing `wdead` from the current T each time (via `dead_now` in the v0 RTL the
+   mutation was run on; since core v0.1 the capture is `wdead <= t_in + tmo`) -- satisfied facts
    1, 2 and 3 while never timing out (mutation E7). Fact 1a was the missing lemma.
    **(proved, `pe_core.v` P4)** The frozen value itself is `T_start + timeout`, with the
    `R0 -> 65535` rule, so "one wrap" below really is at most 65535 ticks after the first
@@ -370,7 +371,7 @@ copy, `bmc` depth 20, boolector):
 | E4a | `wait_active` not cleared by `core_reset` | PASSED every task and every cocotb suite | P1 |
 | E4b | `redir_v`/`redir_t` not cleared by `core_reset` | PASSED every task and every cocotb suite | P1 |
 | E6 | `Rt = R0` timeout `16'hFFFE` (65534 ticks) | PASSED every task and every cocotb suite | P4 |
-| E6b | `wdead <= dead_now + 1` (every timed wait one tick late) | PASSED every task (fuzzer-only kill) | P4 |
+| E6b | `wdead <= dead_now + 1` (v0 RTL; every timed wait one tick late) | PASSED every task (fuzzer-only kill) | P4 |
 | E7 | `else if (is_timed) wait_active <= 1'b0;` in the stalled-wait branch (deadline re-captured every other cycle, timed waits unbounded) | bmc/prove/cover all **PASSED** while facts 1-3 held | P3 |
 | E14 | `w_rt = ir[11:9]` (rt field decoded from the wrong bits) | PASSED (documented as unpinned) | T1b, port-bit form |
 

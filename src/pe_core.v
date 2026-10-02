@@ -92,9 +92,7 @@ module pe_core (
   // i.e. Rn is not ahead of T: a deadline up to 32,768 ticks ahead releases exactly at T == Rn (T
   // moves at most one tick per cycle and Rn cannot change while stalled), one already passed (up to
   // 32,767 ticks behind) releases at once.
-  /* verilator lint_off UNUSEDSIGNAL */
-  wire [15:0] waitt_diff = t_in - rt_v;              // only bit 15 (the sign of T - Rn) is used
-  /* verilator lint_on UNUSEDSIGNAL */
+  wire [15:0] waitt_diff = t_in - rt_v;              // only bit 15 (the sign of T - Rn) is used; 14:0 go to _unused
   wire        waitt_done = !waitt_diff[15];
   wire        delay_done = wait_active ? (dcnt == 9'd0) : (w_imm9 == 9'd0);
   wire        timed_cond = (w_sub == `ISA_WAIT_WAITP) ? cond_met :
@@ -165,7 +163,7 @@ module pe_core (
   assign c2h_data = rd_v;
   wire [15:0] in_v = (ir[8:7] == `ISA_BANKI_UI) ? {8'd0, ui_eff} : (ir[8:7] == `ISA_BANKI_UIO) ? {8'd0, uio_sync} :
                      (ir[8:7] == `ISA_BANKI_UOR) ? {9'd0, uo_rb} : {8'd0, uio_rb};
-  wire _unused = &{ui_sync[7:4], ui_prev[7:4], 1'b0};
+  wire _unused = &{ui_sync[7:4], ui_prev[7:4], waitt_diff[14:0], 1'b0};
   wire [15:0] ldi_v  = ir[8] ? {ir[7:0], rd_v[7:0]} : {8'd0, ir[7:0]};
   wire [15:0] time_v = (ir[8] == `ISA_TIME_SETT) ? (t_in + {8'd0, ir[7:0]}) : (rd_v + {8'd0, ir[7:0]});
 

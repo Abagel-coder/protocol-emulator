@@ -9,7 +9,7 @@ Companion documents:
 
 ## 0. Status, and what is needed from you
 
-- Status 2026-09-22: research done, spec v1 approved (2026-09-16), and **core v0 is implemented, hardened and reviewed** on branch `core-v0` (all ten tasks of `docs/superpowers/plans/2026-09-16-core-v0.md`; whole-branch review plus its fix wave complete; see `HANDOFF.md` and the D6 row below). Not merged: the owner decides merge vs. pull request. The next plan is lanes (pin engines), with the equality-only deadline compare, the SRAM instruction memory and the generated field-slice macros as its open items.
+- Status 2026-09-22: research done, spec v1 approved (2026-09-16), and **core v0 is implemented, hardened and reviewed** on branch `core-v0` (all ten tasks of `docs/superpowers/plans/2026-09-16-core-v0.md`; whole-branch review plus its fix wave complete; see `HANDOFF.md` and the D6 row below). Not merged: the owner decides merge vs. pull request. The next plan is lanes (pin engines), with the SRAM instruction memory and the generated field-slice macros as its open items. (The equality-only deadline compare, also listed here until then, is resolved on branch `core-v0.1`, 2026-10-01: `WAITT` is wrap-safe per spec §6, `docs/superpowers/specs/2026-10-01-wrap-safe-deadline-design.md`; reviewed, not merged.)
 - Section 4's six decisions (D1–D6) have outcomes in its decision log (D2 deferred, D3 left at the default); the schedule below is the original one and is compressed in `HANDOFF.md`.
 
 ## 1. The brief, condensed

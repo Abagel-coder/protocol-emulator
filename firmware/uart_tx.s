@@ -3,11 +3,12 @@
 ;
 ; uo resets to 0 (see pe_gpio.v), which is the same level as the start bit, so without an
 ; explicit idle-high period the pin would never show a real edge going into the start bit --
-; a receiver (or a test comparing against uart_tx.v's fixed transmitter, which idles high out
-; of reset) would have nothing to synchronise on, and an all-zero data byte would produce no
-; edge at all before the stop bit. So the very first thing this firmware does is raise the
-; line and hold it for one full bit-time before asserting the start bit, exactly like every
-; other bit boundary below: deadline (ADDT), then the pin write, then wait for the deadline.
+; a receiver (or a test comparing against the fixed transmitter test/uart_tx_ref.v, which idles
+; high out of reset) would have nothing to synchronise on, and an all-zero data byte would
+; produce no edge at all before the stop bit. So the very first thing this firmware does is
+; raise the line and hold it for one full bit-time before asserting the start bit, exactly
+; like every other bit boundary below: deadline (ADDT), then the pin write, then wait for the
+; deadline.
 .equ BIT 217
   LDI  R2, 0x55        ; test byte
   LDI  R3, 8            ; data bit counter

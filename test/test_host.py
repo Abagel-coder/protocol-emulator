@@ -420,6 +420,45 @@ async def write_ctrl_run0_stops_core_and_run1_resumes(dut):
     assert await count_edges(60) >= 5, "blink loop did not resume after run=1"
 
 @cocotb.test()
+async def run_low_across_deadline_resumes_immediately(dut):
+    """isa.yaml semantics.waits (core v0.1): WAITT is wrap-safe, so a deadline that T passes while
+    RUN is held low -- T free-runs, the paused core does not -- has simply passed when RUN returns,
+    and the WAITT completes in its first active cycle. Under v0's equality rule (RTL mutant W1) it
+    stalled until T wrapped round to the deadline again, ~64,000 clocks later.
+    The program arms a deadline 400 ticks after its first instruction (398 ahead when the WAITT
+    first runs; prescale is 0 after reset, a tick per clock) and waits on it. RUN, the pin, starts
+    the core and is dropped while the WAITT is stalled; it is held low for 600 clocks plus a
+    READ_STATUS (~1,640 clocks at SpiMaster's default 400 ns half period), which also checks that
+    the core is paused on the WAITT (pc 2, neither running nor halted), so T is ~1,900 ticks past
+    the deadline when RUN returns, well inside the 32,767-tick "behind" half.
+    Latency from the RUN pin rising (driven just after a falling edge) to uo[0] reading 1:
+    rising edges 1 and 2 are the two-flop input synchroniser, edge 3 loads the core's RUN register
+    (run_q), so the core is active again in the cycle after edge 3 and the WAITT completes in it;
+    edge 4 ends that cycle, SET UO, 0x01 executes in the next one and its registered write lands
+    on edge 5. So uo[0] must read 1 exactly after the 5th rising edge (one more than
+    run_latency_pin_three_cycles_ctrl_two's 4, for the WAITT's own cycle), and must still read 0
+    when RUN rises -- the deadline passing while the core was paused must not release it early (an
+    inverted compare, W2, releases the on-time deadline at once, before RUN is ever dropped).
+    Pins only: RUN and SPI on ui_in, uo_out read back, so it holds at gate level too."""
+    spi = await start(dut)
+    await spi.xfer(encode_write_imem(0, assemble("SETT R1, 200\nADDT R1, 200\nWAITT R1\nSET UO, 0x01\nHALT\nNOP")))
+    await FallingEdge(dut.clk)
+    dut.ui_in.value = 0x80 | 0x40                                    # RUN pin high (CS_n high): start
+    await ClockCycles(dut.clk, 60)                                   # SETT, ADDT, then stalled in the WAITT
+    await FallingEdge(dut.clk)
+    assert int(dut.uo_out.value) & 1 == 0, "WAITT released early: its deadline was still ~340 ticks ahead"
+    dut.ui_in.value = 0x40                                           # RUN pin low: pause while stalled
+    await ClockCycles(dut.clk, 600)                                  # T passes the deadline while the core is paused
+    st, pc, _ = await status(spi)                                    # RUN stays low through the transfer
+    assert st & 0x03 == 0 and pc == 2, ("core not paused on the WAITT", st, pc)
+    await FallingEdge(dut.clk)
+    assert int(dut.uo_out.value) & 1 == 0, "the WAITT completed while RUN was low"
+    dut.ui_in.value = 0x80 | 0x40                                    # RUN pin high again, just after a falling edge
+    n = await first_edge_after(dut, 20)
+    assert n == 5, ("uo[0] rose after rising edge %r following RUN's return, expected 5 (2 sync flops + "
+                    "RUN register, the WAITT's one cycle, the SET's registered write)" % n)
+
+@cocotb.test()
 async def reset_core_mid_wait_restarts_from_pc0(dut):
     """docs/info.md: WRITE_CTRL bit1 restarts the program at PC 0. A reset issued while the core
     is stalled in a wait, or while a taken branch's delay slot is pending, must discard that

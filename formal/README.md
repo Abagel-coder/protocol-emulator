@@ -46,12 +46,29 @@ assumed".
 
 ## Theorems
 
-- **T1_deadline_exact** (`src/pe_core.v`): whenever the core is `active` on a `WAITT`
-  instruction, `adv == (t_in == rt_v)` -- it releases in exactly the cycle `T == Rn`, never
-  earlier, never later.
+- **T1_deadline_rule** (`src/pe_core.v`; restated in core v0.1 for the wrap-safe rule -- v0's
+  T1_deadline_exact was `adv == (t_in == rt_v)`): whenever the core is `active` on a `WAITT`,
+  `adv == ((T - Rn) mod 2^16 < 32768)`. `WAITT`, `T - Rn` and `Rn` are taken from the instruction
+  word's own bits and the register file (formal-only wires `f_is_waitt`, `f_diff`, `f_rn`), not from
+  the RTL's decode or its `waitt_diff`/`waitt_done` wires. The lemmas below make the timing
+  contract explicit:
+  - **T1c_release_exact_after_stall** (two-cycle, independent): a `WAITT` that stalled in the
+    previous cycle and completes now, decoding the same instruction word, does so with `T == Rn`.
+    It needs two facts it does not state itself -- see "Hypotheses of T1c" below.
+  - **T1d_no_late_release**: an active `WAITT` with `T == Rn` completes in that cycle.
+  - **T1e_late_deadline**: in a `WAITT`'s first cycle (`!wait_active`), `T - Rn` in 0..32767
+    completes in that cycle and `T - Rn` in -32768..-1 (32768..65535 mod 2^16) does not.
+  - **T1f_waitt_keeps_flags** (two-cycle, independent): a cycle in which the core executed a
+    `WAITT`, completing or stalling, leaves `{fto, fc, fz}` unchanged (no miss flag).
+
+  For an on-time deadline (at most 32,768 ticks ahead when the `WAITT` first executes) these give
+  v0's guarantee unchanged: no release while the deadline is ahead (T1e, T1), release in the cycle
+  `T == Rn` (T1d), and after a stall only then (T1c). A deadline already behind `T` by 1..32,767
+  ticks -- an overrun loop, or RUN held low across it -- releases in its first cycle (T1e).
 - **T1b** (`src/pe_core.v`, spec-pinning restatement stated on the port bits):
-  `rt_v == (imem_data[8:6] == 0) ? 0 : regs[imem_data[8:6]]` -- ties T1's `rt_v` to the register
-  named by the instruction word's own `rt` field (`isa.yaml` `layouts.WAIT`), R0 reading as zero.
+  `rt_v == (imem_data[8:6] == 0) ? 0 : regs[imem_data[8:6]]` -- ties the RTL's `rt_v` (the `Rn` of its
+  `WAITT` compare) to the register named by the instruction word's own `rt` field (`isa.yaml`
+  `layouts.WAIT`), R0 reading as zero.
   Because it names `imem_data[8:6]` rather than the internal `w_rt` wire, it pins the field
   decode as well as the register select (mutation E14 below).
 - **T2_static_timing** (`src/pe_core.v`, two parts): (a) whenever `active` and the instruction
@@ -90,6 +107,12 @@ assumed".
   completes (`adv`) in any cycle where `t_in == wdead`. See "T4's bound: what's proved vs.
   argued" below for how this becomes the 65536-tick bound, and what the folded-in counting-part
   tasks add.
+- **T4c_timed_to_equiv** (`src/pe_core.v`, core v0.1): the timeout completion `timed_to`, now
+  `wait_active ? (t_in == wdead) : (tmo == 0)` (the `T + timeout` adder only on the `wdead` capture
+  path, no longer in front of the compare on the `adv -> next_pc` path), equals v0's
+  `t_in == (wait_active ? wdead : t_in + timeout)` in every state, with the timeout taken from the
+  port bits (`R0 -> 65535`, as in P4). Timed waits keep their equality compare: the captured
+  deadline cannot be missed while the core is active, and `Rt = R0` keeps the full 65,535 ticks.
 - **T5_side_effects_only_when_active** (`src/pe_core.v` T5a/T5b/RUN_LINK,
   `formal/core_props.v` T5c/T5d): `gpio_wr_en`, `gpio_pin_en`, `h2c_pop`, `c2h_push` (T5b), the
   GPIO output registers `uo_out`/`uio_out`/`uio_oe` (T5c), and the host FIFO strobes as seen from
@@ -107,9 +130,9 @@ assumed".
 handshakes). The T-numbers here follow the plan's brief, which is why T4/T5 do **not** mean the
 spec's 4/5. The mapping, and what is actually proved on this branch:
 
-| Spec §6 | Statement (abridged) | Here | Status on `core-v0` |
+| Spec §6 | Statement (abridged) | Here | Status (core v0.1) |
 |---|---|---|---|
-| 1 | `WAITT` releases in the cycle `T == Rn` | T1, T1b | **proved** (k-induction), with T1b pinning the `rn` field on the port bits |
+| 1 | `WAITT` releases in the cycle `T == Rn`; deadline compares are wrap-safe (signed difference, deadline up to 32,767 ticks ahead) | T1, T1b, T1c, T1d, T1e, T1f | **proved** (k-induction) for the wrap-safe rule: release iff `T - Rn` mod 2^16 < 32768 (T1), exactly at `T == Rn` after a stall (T1c, under its two hypotheses) and never past it while active (T1d), a passed deadline released at once (T1e), flags untouched (T1f); T1b pins the `rn` field on the port bits. (v0 proved the equality-only rule. The spec allows deadlines up to 32,767 ticks ahead; the ISA rule also treats exactly 32,768 ahead as ahead.) |
 | 2 | every non-wait instruction advances `PC` every cycle; latency depends only on the opcode | T2a, T2b | **proved**: T2a (one-cycle completion, a restatement of `assign adv`), T2b (the successor address, independent) |
 | 3 | `uio_oe == 0` from reset until the first `OE` executes | T3 (grant mask), T3b/T3c | **proved**, and stronger than stated: only bits granted by an executed OE-set can ever be on |
 | 4 | each pin output changes at most once per cycle and only as the result of an executed pin instruction (or a lane) | T5c (outputs stable while `!active`) | **partially proved**: "at most once per cycle" holds by construction (one registered write per cycle) and quiescence while inactive is T5c, but "only as the result of an executed pin instruction" is not stated as a property (`uo_out/uio_out/uio_oe change ⇒ $past(wr_en \|\| pin_en)` would close it; not attempted) |
@@ -117,7 +140,8 @@ spec's 4/5. The mapping, and what is actually proved on this branch:
 | 6 | host/lane FIFOs never lose or duplicate a word; timestamp FIFO reports overrun | (`pe_fifo` proved against a reference queue in the whole-branch review's scratch harness, `.superpowers/sdd/final-review-rtl.md` A-1; not in `core.sby`) | **not in this proof set**; lanes and the timestamp FIFO do not exist in v0 |
 
 Beyond the spec's six: P1 (soft-reset state), T5a/T5b/T5d/RUN_LINK (side effects only when
-active, RUN sampling) are proved and have no spec number.
+active, RUN sampling) and T4c (the simplified timeout completion equals v0's) are proved and have no
+spec number.
 
 ## What is pinned vs. independent
 
@@ -129,7 +153,11 @@ do not catch.
 
 | Property | Kind | Why kept |
 |---|---|---|
-| T1 | **spec-pinning** (same-cycle identity: `adv` chains through `wait_done`/`waitt_done` back to `t_in`/`rt_v`, all in the current cycle) | the deadline-exactness contract itself, and the brief's original headline property |
+| T1 | **spec-pinning** (same-cycle identity: `adv` against the ISA rule `T - Rn mod 2^16 < 32768`, stated on the instruction word's bits and the register file, not on the RTL's `waitt_done`) | the deadline rule itself, and the brief's original headline property (restated for the wrap-safe rule in core v0.1); kills W1, W2, W3 |
+| T1c | independent (two cycles: a stalled cycle and the release cycle; needs the timebase's one-tick step) | exactness for on-time deadlines under the wrap-safe rule -- T1 alone only says `T - Rn < 32768`; kills W2 and W3 (a `WAITT` stalled at `T - Rn = 0x7FFF` released at `0x8000`) |
+| T1d | same-cycle corollary of T1, stated separately | "no late release" for a deadline `T` reaches while active; kills W2 |
+| T1e | same-cycle corollary of T1, restricted to the first cycle | the late-deadline behaviour and its boundary (0..32767 completes, -32768..-1 does not); kills W1, W2, W3 |
+| T1f | independent (two cycles: flags before and after a `WAITT` cycle) | `WAITT` leaves the flags untouched, late or on time; kills W6a/W6b |
 | T1b | **spec-pinning**, but stated against the instruction word's own bits (`imem_data[8:6]`), not the internal `w_rt` wire | pins both the register select and the `rt` field decode: the E14 mutant (`w_rt = ir[11:9]`) fails it at once, where the earlier `regs[w_rt]` form did not (it restated `rt_v` in terms of the same wire T1 uses, so a wrong extraction was consistently wrong in both) |
 | T2a | **spec-pinning** (restates the RTL's own `assign adv = active && !is_halt && (!is_wait \|\| wait_done)` line, minus the wait case) | the "every non-WAIT instruction completes in 1 cycle" contract; killed by an edit to that line (an added stall condition), not by a bug elsewhere |
 | T2b | independent (states the successor address from `$past(redir_v)`/`$past(redir_t)`/`$past(pc)` and the redirect latch from `$past(redirect_new)`/`$past(redirect_tgt)`, never through the RTL's `next_pc` wire) | catches a broken redirect path: mutation M5 (`pc <= pc_p1`) and mutation E1 (`next_pc` mux without the redirect leg), which the earlier `pc == $past(next_pc)` form let through |
@@ -140,6 +168,7 @@ do not catch.
 | T3b/T3c | **spec-pinning** (`uio_oe`'s own next-state expression, restated) | killed directly by an OE write producing the wrong next-state (mutation M4) |
 | T4 part 1 | independent (`wdead` stability is a multi-cycle invariant, not a single-line restatement) | catches deadline re-capture bugs (mutation M6) |
 | T4 part 2 | **spec-pinning** (`wait_done`'s timed-completion case, restated as "adv when t_in==wdead") | killed by a broken timeout-detection path |
+| T4c | **equivalence** (combinational, every state: the new `timed_to` against v0's expression, timeout from the port bits) | the timing simplification changes no behaviour; kills W4 (`tmo == 1` in the first cycle) |
 | T5a | **spec-pinning** (`active`'s own continuous assignment, restated verbatim) | killed by a bug in `active`'s formula itself (mutation M2), but *not* by a bug in `run_q`'s own update (see RUN_LINK) |
 | RUN_LINK | independent (relates `run_q` to `$past(run)`, i.e. a genuine one-cycle-delay contract) | killed by mutation M3, which T5a alone cannot see |
 | T5b | independent (relates 4 strobes to `active`, a different signal) | the strobe-quiescence contract |
@@ -167,6 +196,27 @@ extra assumption relative to the real chip, since `en` is chip-accurately wired 
 value (`(* anyconst *)`) for the whole trace -- this second one *is* the one place this proof set
 permits an extra assumption beyond reset ("the timebase configuration", as the task brief allows).
 It does not weaken T1-T5's own proofs, which remain assumption-free beyond reset.
+
+### Hypotheses of T1c
+
+T1c ("a `WAITT` that stalled and now completes does so at `T == Rn`") is proved like everything
+else -- no `assume` -- but its truth rests on two facts it does not state, listed here so that
+nobody mistakes it for a property of `pe_core.v` alone:
+
+- **HT: `T` moves by at most one tick per cycle.** `core_props.v` instantiates the real
+  `pe_timebase` (with a free `prescale`), whose `t_out` either holds or increments, so the solver
+  sees this fact in every transition; it is the same fact the `timebase_*` tasks prove as "T never
+  skips a value" on their own harness. If `t_in` came from a source that could jump (a different
+  timebase, or a host write to `T`, neither of which exists), a stalled `WAITT` could step over
+  `T == Rn` into the "behind" half and release with `T != Rn`.
+- **H3 (as for T4): the instruction word under a stalled `pc` does not change.** `imem_data` is
+  free every cycle in `core_props.v`, so T1c requires `imem_data == $past(imem_data)` in its
+  antecedent. On the chip `pe_imem_ff` returns the same word for the same address -- unless the
+  host rewrites that word over SPI during the stall, which T1c does not cover.
+
+`Rn` itself needs no hypothesis: no register is written in a cycle without `adv`, which the
+solver sees directly. T1, T1d, T1e and T1f need neither hypothesis (T1/T1d/T1e are same-cycle;
+T1f compares flags across one cycle in which a `WAITT` executed, whatever `T` does).
 
 ## T4's bound: what's proved vs. argued
 
@@ -205,8 +255,10 @@ exactly three hypotheses about the environment beyond what facts 1-3 state:
   simply does not progress -- a real, uninteresting way to violate a liveness claim that has
   nothing to do with the core's own correctness, and it is why fact 3's proof needs its own
   `en == 1` (unconditional counting) assumption rather than inheriting the main proof's free
-  `run`. (A deadline that T passes while RUN is low is then missed until T wraps -- see
-  `docs/info.md`, "v0 limitations".)
+  `run`. (A timed-wait deadline that `T` passes while RUN is low is then missed until `T` comes
+  round to it again, up to 65,536 ticks later -- see the caveats in `docs/info.md`. A `WAITT`
+  differs since core v0.1: its deadline is then behind `T`, and it completes in the first active
+  cycle after the resume, T1.)
 - **H2: `prescale` must not be reprogrammed while the wait is outstanding.** Fact 3 is proved
   for a single fixed `prescale` (`(* anyconst *)`); if firmware changes `prescale` mid-wait the
   tick period changes too, and the "revisits every value within 65536 ticks" argument (which
@@ -249,6 +301,13 @@ judged out of scope.
   Earlier versions of this README listed the `rt` decode
   itself as "covered only empirically"; since T1b was restated on the port bits (and P4 added),
   mutation E14 (`w_rt = ir[11:9]`) fails `bmc` at step 1, so that caveat no longer applies.
+- **A `WAITT`'s eventual release is an argument, not a theorem** (like T4's bound). A deadline up
+  to 32,768 ticks ahead stalls until `T` reaches it; T1/T1c/T1d say what happens in that cycle and
+  the timebase tasks that `T` keeps counting, but no single property says the release happens --
+  it carries H1 (the core stays active; if it does not, the `WAITT` releases at the first active
+  cycle once `T` has passed the deadline, T1) and H2. T1c also carries the hypotheses listed under
+  "Hypotheses of T1c". A deadline 32,769..65,535 ticks ahead releasing at once is the ISA rule
+  (indistinguishable from a passed deadline), not a gap.
 - **The 65536-tick bound is bounded-hypothesis, not unconditional** -- see "T4's bound: what's
   proved vs. argued" immediately above: it additionally requires the core to stay active and
   `prescale` to stay fixed for the duration of the wait, and it is an argument composed from
@@ -274,6 +333,9 @@ judged out of scope.
 All mutations were applied and tested in a scratch copy of the repository (`git worktree add`),
 never on the working tree used for the final commit; the working tree was confirmed unmodified
 (`git status`/`git diff --stat` clean) throughout. See the task report for full transcripts.
+
+The M- and E-tables and the notes after them are from core v0 (v0 RTL and property set, where T1
+was the equality form `adv == (t_in == rt_v)`); the core v0.1 mutants (W-table) close the section.
 
 | # | Mutation | Expected to fail | Result |
 |---|---|---|---|
@@ -306,7 +368,7 @@ The unmutated design passes every one of the five `core.sby` tasks, and `core_pr
 `core_timebase_prove` both report `successful proof by k-induction.` in their logs (not just
 `DONE (PASS, rc=0)` -- see "Results" below for exact log lines).
 
-Two mutations from the original submission's write-up are re-confirmed still relevant here:
+Two mutations from the original submission's write-up were re-confirmed still relevant (core v0):
 
 - **T1**: `bmc` (depth 20, boolector) fails at step 3, `assert(adv == (t_in == rt_v))` violated
   with `rt_v == 0`, mutant releasing at `t_in == 1` instead.
@@ -325,7 +387,8 @@ identity -- confirmed empirically (this exact literal mutation was applied and `
 cleanly through the full depth). The actually-buggy re-capture this mutation is meant to model was
 therefore implemented as `wdead <= t_in + tmo;` unconditionally (recomputing the deadline fresh
 from the current `t_in`/`tmo` every cycle rather than the latch degenerating to itself) -- this is
-what fails T4 part 1 as shown in the table above.
+what fails T4 part 1 as shown in the table above. (Core v0.1 removed `dead_now`: the capture is
+now written `wdead <= t_in + tmo` directly, and `timed_to` no longer reads an adder.)
 
 And the review that produced this round of fixes additionally found: **T5a does not catch M3**
 (`run_q <= 1'b1;`), because that mutation never touches the `assign active = ...` line T5a
@@ -333,17 +396,44 @@ re-types -- T5a re-derives `active` purely in terms of `run_q`/`halted`/`core_re
 without checking that `run_q` itself has the right value. RUN_LINK closes this by directly
 constraining `run_q` against `$past(run)`.
 
+**Core v0.1 (wrap-safe `WAITT`, simplified `timed_to`).** Each mutant was applied to `src/pe_core.v`
+(or `tools/sim.py`) in a scratch copy; the property columns come from `bmc` depth 20 run with a
+scratch-only `smtbmc --keep-going boolector` engine line, which lists every failing assertion rather
+than the first, and each was confirmed by the real `prove` task failing too. W6a/W6b are extra
+mutants (no brief mutant touches the flags) that prove T1f and the flag tests decisive.
+
+| # | Mutation | Properties that fail | Directed tests that fail |
+|---|---|---|---|
+| W1 | `waitt_done = (t_in == rt_v)` (v0's equality rule) | T1, T1e (step 3); the late-release cover becomes unreachable | `waitt_late_deadline_completes_in_one_cycle`, `waitt_boundary_32768_ahead_waits_exactly`, `waitt_leaves_to_unchanged` |
+| W2 | `waitt_done = waitt_diff[15]` (inverted sign) | T1, T1d, T1e (steps 3-4), T1c (step 5) | the same three |
+| W3 | `waitt_done = !waitt_diff[14]` (window on bit 14) | T1, T1e (step 4), T1c (step 5) | `waitt_late_...` (32,767 behind stalls), `waitt_boundary_...` (32,768 ahead released at once) |
+| W4 | `timed_to = wait_active ? (t_in == wdead) : (tmo == 16'd1)` | T4c only (step 1) | none directed; the differential fuzzer |
+| W5 | `wdead <= t_in` (timeout dropped) | P4 only (step 4) | `waitp_timeout_and_release`, `r0_timeout_is_65535_ticks`, `waitt_leaves_to_unchanged`; the fuzzer |
+| W6a | a completing `WAITT` clears `TO` | T1f only (step 5) | `waitt_leaves_to_unchanged` (and the oracle's `test_waitt_leaves_to_unchanged` against the same change in `tools/sim.py`) |
+| W6b | a late `WAITT` sets `TO` (the declined miss flag) | T1f only (step 4) | the same |
+| S-W1 | `tools/sim.py`: v0's equality rule in the oracle | -- | pytest: `test_waitt_late_deadline_completes_in_one_cycle`, `test_waitt_boundary_32768_ahead_waits_exactly`, `test_waitt_leaves_to_unchanged` |
+
 ## Cover witnesses
 
-All 5 cover goals are gated on `rst_n && f_past_valid` (and `$past(rst_n)` where a `$past` is
+All 6 cover goals are gated on `rst_n && f_past_valid` (and `$past(rst_n)` where a `$past` is
 used), so none of them can be witnessed by garbage pre-reset flop state -- two of the original
 five covers (the timed-wait-timeout cover and the OE-executes cover) had no such guard at all
 before this round of fixes, and were reachable using uninitialised-register garbage at cycle 0
 without ever going through a real reset.
 
-Two witnesses were decoded from their VCDs (`formal/core_timebase_*` are unrelated to cover;
+Three witnesses were decoded from their VCDs (`formal/core_timebase_*` are unrelated to cover;
 witnesses live under `formal/core_cover/engine_0/`) to confirm they are genuine and not an
 artifact of the free-`imem_data` harness silently reusing a different instruction:
+
+(The WAITT-release and timed-wait-timeout descriptions below were decoded on the core v0 run.
+Witnesses and their `traceN` numbers -- assigned in the order goals are reached -- change whenever
+the design or the property set does. In the core v0.1 run those two goals are `trace5.vcd` and
+`trace4.vcd`, re-decoded as equally genuine: WAITT release -- `POP R7` (R7 = 1 from the free host
+data), a `DELAY` at pc 1 that latches `wait_active`, then `WAITT R7` at pc 1 stalling at `T` = 0
+and, as the identical word, releasing at `T` = 1 == R7; timed-wait timeout -- reserved WAIT
+sub-op 6 completing at once (the latched start), a `DELAY` at pc 1 latching `wdead` = 0, then a
+`WAITF` on reserved flag 23 at pc 1 timing out at `T` = 0 == `wdead`, `fto` 1 the cycle after:
+the same free-`imem_data` re-decoding pattern described below.)
 
 - **WAITT release** (the `f_waitt_stall_seen` cover, reached at step 6, `engine_0/trace4.vcd`, decoded after
   the `f_waitt_stall_ir` fix): cycle 2 executes a HOST-class `POP R6` (`ir[15:12]==14`, pc 0 -> 1).
@@ -382,6 +472,12 @@ artifact of the free-`imem_data` harness silently reusing a different instructio
   *combinationally re-decoded* instruction word at the same pc changes (`DELAY` -> `WAITF`) -- this
   cover was not part of finding 5's fix, so it still carries the free-`imem_data` harness artifact
   disclosed in "What is NOT proved" (unlike the WAITT witness above, which no longer does).
+- **WAITT late release** (core v0.1; the `f_diff != 0 && f_diff < 32768` first-cycle cover in
+  `pe_core.v`, reached at step 3, `engine_0/trace0.vcd`): reset in steps 0-1; in cycle 2 the core is
+  active on word `0x7101` = `WAITT R4` (`[5:0]` = `000001`, ignored operand bits), R4 still 0 from
+  reset and `T` = 1, so `T - Rn` = 1 -- the deadline passed one tick ago -- and the `WAITT` completes in
+  its first cycle (`wait_active` 0, `adv` 1). Small, but exactly the behaviour T1e's first half
+  claims, reached from reset; under W1 (v0's equality rule) the goal is unreachable.
 - **Taken branch -> delay slot -> target** (the `f_branch_stage == 2` cover near the end of
   `pe_core.v`'s formal block, reached at step 5): the 3-stage `f_branch_stage` tracker reaches
   stage 2 with `pc == f_branch_target`, i.e. a taken redirect's delay-slot instruction actually
@@ -409,15 +505,15 @@ file changes):
 
 | Task | Mode | Engine | Depth | Result | Wall time | Notes |
 |---|---|---|---|---|---|---|
-| `bmc`             | BMC         | boolector | 20        | PASS              | 9s  | no assertion violated through step 19 (was 5s before P1/P3/P4/T2b's successor form were added) |
-| `prove`           | k-induction | boolector | 8 (bound) | PASS              | 1s  | induction closed at step 5 |
-| `cover`           | cover       | boolector | 20 (bound)| PASS (5/5 goals)  | 1s  | all 5 goals reached by step 6 (steps 3, 4, 5, 6, 6) |
+| `bmc`             | BMC         | boolector | 20        | PASS              | 8s  | no assertion violated through step 19 (9s in v0; 5s before P1/P3/P4/T2b's successor form were added) |
+| `prove`           | k-induction | boolector | 8 (bound) | PASS              | <1s | induction closed at step 5 (unchanged by the core v0.1 properties) |
+| `cover`           | cover       | boolector | 20 (bound)| PASS (6/6 goals)  | 1s  | all 6 goals reached by step 6 (steps 3, 3, 4, 5, 6, 6; the core v0.1 late-release goal at step 3) |
 | `timebase_bmc`    | BMC         | boolector | 40 (bound)| PASS              | <1s | no assertion violated through step 39 |
 | `timebase_prove`  | k-induction | yices     | 300 (bound)| PASS            | 36s | induction closed at step 43 |
 
 `sby -f core.sby` (all five tasks, run in parallel by `sby`'s own scheduler) completes in
-about 37 s of wall-clock time in total (bounded by `timebase_prove`). Numbers from the final fix
-wave's run on the property set described in this file (OSS CAD Suite 2026-09-15).
+about 37 s of wall-clock time in total (bounded by `timebase_prove`). Numbers from the core v0.1
+run (2026-10-01) on the property set described in this file (OSS CAD Suite 2026-09-15).
 
 "Depth" for `prove` is the search bound sby was given (`prove: depth N`); k-induction itself
 reports the actual step at which the induction check succeeded, which is what makes each of
@@ -427,7 +523,7 @@ bounded one -- noted in "Notes" above, and confirmed by the exact log line
 `core_timebase_prove/logfile.txt`. `bmc` depth is a true bound: it is a proof of no
 counterexample within that many steps, not an unbounded proof, and is reported as such.
 
-`cover` reached all 5 cover goals -- see "Cover witnesses" above for what each one was decoded to
+`cover` reached all 6 cover goals -- see "Cover witnesses" above for what each one was decoded to
 show.
 
 ### Solver notes

@@ -3,6 +3,7 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge
 from tools.asm import assemble, assemble_file
+from tests.test_sim import WAITT_TO_PROGRAM, waitt_program   # the same programs the oracle's tests run
 
 FIRMWARE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "firmware")
 
@@ -225,6 +226,53 @@ async def waitt_period_holds_across_T_wraparound(dut):
     periods = [b - a for a, b in zip(edges[1:], edges[2:])]
     assert len(periods) > 65536 // 5, len(periods)   # confirms the run truly spans the wrap
     assert all(p == 5 for p in periods), (periods[:5], periods[-5:])
+
+# ---- wrap-safe WAITT (isa.yaml semantics.waits, core v0.1): WAITT Rn completes in the first cycle in
+# which bit 15 of (T - Rn) mod 2^16 is 0. The programs come from tests/test_sim.py, where the oracle runs
+# them: waitt_program(delta) puts WAITT R1 at address 4, first executing in cycle 4 with R1 == T + delta
+# (this harness's T reads 0 in cycle 0 and ticks every cycle at prescale 0, like the oracle's default),
+# and the SET UO, 0x01 after it is on the pin from the cycle after it executes.
+
+def first_nonzero(values):
+    return next((i for i, v in enumerate(values) if v), None)
+
+@cocotb.test()
+async def waitt_late_deadline_completes_in_one_cycle(dut):
+    """Deadlines 1, 300 and 32,767 ticks behind T when the WAITT first executes (cycle 4): each completes
+    in that cycle, so the SET executes in cycle 5 and uo reads 1 from cycle 6. The v0 equality rule
+    (RTL mutant W1) stalled each until T wrapped round to R1, 65,536 - d ticks later; the inverted sign
+    (W2) stalls on every late deadline; a window on bit 14 (W3) stalls on the 32,767-tick one."""
+    for d in (1, 300, 32767):
+        await boot(dut, waitt_program(-d)); tr = await trace(dut, 12)
+        assert first_nonzero([t[0] for t in tr]) == 6, (d, [t[0] for t in tr])
+        assert int(dut.halted.value) == 1, d
+
+@cocotb.test()
+async def waitt_boundary_32768_ahead_waits_exactly(dut):
+    """A deadline exactly 32,768 ticks ahead (T - Rn == 0x8000, bit 15 set) still counts as ahead: the
+    WAITT stalls and completes exactly when T == Rn in cycle 4 + 32,768, so uo reads 1 from cycle
+    32,774 and not one cycle earlier or later (a window on bit 14, W3, completes it at once). One tick
+    further, 32,769 ahead (T - Rn == 0x7FFF), is indistinguishable from a passed deadline and completes
+    in its first cycle (the v0 equality rule, W1, stalls it 32,769 ticks)."""
+    await boot(dut, waitt_program(32768))
+    first = None
+    for k in range(4 + 32768 + 6):
+        await FallingEdge(dut.clk)
+        if int(dut.uo_out.value) & 1:
+            first = k; break
+    assert first == 4 + 32768 + 2, first
+    await boot(dut, waitt_program(32769)); tr = await trace(dut, 12)
+    assert first_nonzero([t[0] for t in tr]) == 6, [t[0] for t in tr]
+
+@cocotb.test()
+async def waitt_leaves_to_unchanged(dut):
+    """isa.yaml: WAITT leaves the flags untouched, late or on time. tests/test_sim.py's WAITT_TO_PROGRAM
+    sets TO = 1 (a WAITF that times out), runs a late and an on-time WAITT, checks TO with BTO, then sets
+    TO = 0 (a WAITF that completes on its flag) and does the same; any WAITT that changed TO puts a
+    failure marker (0x02, 0x04 or 0x08) on uo, success leaves exactly 0x01."""
+    await boot(dut, WAITT_TO_PROGRAM); tr = await trace(dut, 40)
+    assert int(dut.halted.value) == 1 and tr[-1][0] == 0x01, [t[0] for t in tr]
+    assert (int(dut.flags.value) >> 2) & 1 == 0
 
 @cocotb.test()
 async def host_fifo_push_pop(dut):

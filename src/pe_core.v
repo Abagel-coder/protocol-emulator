@@ -80,7 +80,6 @@ module pe_core (
   wire [5:0]  w_flag = ir[5:0];
   wire [15:0] rt_v   = (w_rt == 3'd0) ? 16'd0 : regs[w_rt];
   wire [15:0] tmo    = (w_rt == 3'd0) ? 16'hFFFF : rt_v;
-  wire [15:0] dead_now = wait_active ? wdead : (t_in + tmo);
   wire        pin_now  = w_bank ? uio_sync[w_pin] : ui_eff[w_pin];
   wire        pin_prev = w_bank ? uio_prev[w_pin] : uip_eff[w_pin];
   wire        cond_met = (w_cond == `ISA_WP_LOW)  ? !pin_now :
@@ -89,11 +88,21 @@ module pe_core (
   wire        flag_v   = (w_flag == {1'b0, `ISA_FLAG_RXV}) ? h2c_valid :
                          (w_flag == {1'b0, `ISA_FLAG_TXE}) ? !c2h_full :
                          (w_flag == {1'b0, `ISA_FLAG_TO})  ? fto : 1'b0;
-  wire        waitt_done = (t_in == rt_v);
+  // WAITT: wrap-safe deadline (isa.yaml semantics.waits). Done once bit 15 of T - Rn (mod 2^16) is 0,
+  // i.e. Rn is not ahead of T: a deadline up to 32,768 ticks ahead releases exactly at T == Rn (T
+  // moves at most one tick per cycle and Rn cannot change while stalled), one already passed (up to
+  // 32,767 ticks behind) releases at once.
+  /* verilator lint_off UNUSEDSIGNAL */
+  wire [15:0] waitt_diff = t_in - rt_v;              // only bit 15 (the sign of T - Rn) is used
+  /* verilator lint_on UNUSEDSIGNAL */
+  wire        waitt_done = !waitt_diff[15];
   wire        delay_done = wait_active ? (dcnt == 9'd0) : (w_imm9 == 9'd0);
   wire        timed_cond = (w_sub == `ISA_WAIT_WAITP) ? cond_met :
                            (w_sub == `ISA_WAIT_WAITF) ? flag_v : 1'b1;   // WAITL: no lanes in v0
-  wire        timed_to   = (t_in == dead_now);
+  // Timed waits keep the equality compare against the deadline wdead = T + timeout captured when the
+  // wait starts. In the first cycle T == T + tmo exactly when tmo == 0, so the adder sits only on the
+  // wdead capture path, not in front of the compare on the adv -> next_pc path.
+  wire        timed_to   = wait_active ? (t_in == wdead) : (tmo == 16'd0);
   wire        is_timed   = is_wait && (w_sub != `ISA_WAIT_WAITT) && (w_sub != `ISA_WAIT_DELAY);
   wire        wait_done  = (w_sub == `ISA_WAIT_WAITT) ? waitt_done :
                            (w_sub == `ISA_WAIT_DELAY) ? delay_done : (timed_cond || timed_to);
@@ -191,7 +200,7 @@ module pe_core (
             default: ;
           endcase
         end else if (is_wait) begin
-          if (!wait_active) begin wait_active <= 1'b1; wdead <= dead_now; dcnt <= w_imm9 - 9'd1; end
+          if (!wait_active) begin wait_active <= 1'b1; wdead <= t_in + tmo; dcnt <= w_imm9 - 9'd1; end
           else if (w_sub == `ISA_WAIT_DELAY) dcnt <= dcnt - 9'd1;
         end
       end
@@ -208,13 +217,43 @@ module pe_core (
   reg f_past_valid = 1'b0;
   always @(posedge clk) f_past_valid <= 1'b1;
 
+  // Formal-only views of a WAITT, taken from the instruction word's own
+  // bits (isa.yaml layouts.WAIT: class [15:12], sub [11:9], rn [8:6]) and the
+  // register file -- not from the RTL's decode wires (is_wait, w_sub, rt_v)
+  // or its wait-unit wires (waitt_diff, waitt_done) -- so the WAITT
+  // properties below see a wrong decode or a wrong compare instead of
+  // restating it. f_diff is T - Rn mod 2^16; the ISA's rule (isa.yaml
+  // semantics.waits, core v0.1) is "complete once it is below 32768".
+  wire        f_is_waitt = (imem_data[15:12] == `ISA_CLS_WAIT) && (imem_data[11:9] == `ISA_WAIT_WAITT);
+  wire [15:0] f_rn       = (imem_data[8:6] == 3'd0) ? 16'd0 : regs[imem_data[8:6]];
+  wire [15:0] f_diff     = t_in - f_rn;
+
   always @(posedge clk) if (f_past_valid && rst_n) begin
-    // T1_deadline_exact: whenever the core is active on a WAITT instruction,
-    // adv == (t_in == rt_v) -- it releases in exactly the cycle T == Rn,
-    // never earlier or later. (No separate !core_reset conjunct is needed
-    // on this outer guard: `active`, used inside, already implies it.)
-    if (active && is_wait && w_sub == `ISA_WAIT_WAITT)
-      assert(adv == (t_in == rt_v));
+    // T1_deadline_rule (the deadline theorem, restated for the wrap-safe
+    // rule in core v0.1; v0's T1 was adv == (t_in == rt_v)): whenever the
+    // core is active on a WAITT, adv == (T - Rn mod 2^16 < 32768) -- a
+    // deadline equal to T or up to 32,767 ticks behind completes in that
+    // cycle, one ahead (T - Rn in 32768..65535, i.e. 1..32,768 ticks ahead)
+    // stalls. That a stalled WAITT then releases exactly at T == Rn, never
+    // earlier or later, is T1c + T1d below. (No separate !core_reset
+    // conjunct is needed on this outer guard: `active` already implies it.)
+    if (active && f_is_waitt)
+      assert(adv == (f_diff < 16'h8000));
+
+    // T1d_no_late_release: an active WAITT whose deadline is exactly T
+    // completes in that cycle -- a deadline T reaches while the core is
+    // active is never missed.
+    if (active && f_is_waitt && (t_in == f_rn))
+      assert(adv);
+
+    // T1e_late_deadline: in a WAITT's first cycle (no wait outstanding), a
+    // deadline at T or behind it by up to 32,767 ticks (T - Rn in 0..32767)
+    // completes in that cycle, and one ahead of T (T - Rn in -32768..-1,
+    // i.e. 32768..65535 mod 2^16) does not.
+    if (active && f_is_waitt && !wait_active) begin
+      if (f_diff <= 16'd32767) assert(adv);
+      else                     assert(!adv);
+    end
 
     // T2_static_timing (part a): whenever active and the instruction is
     // neither a WAIT nor HALT, adv is 1 (it completes in the cycle it is
@@ -224,7 +263,7 @@ module pe_core (
   end
 
   // T1b (spec-pinning restatement, stated on the *port* bits): rt_v -- the
-  // value T1's deadline comparison uses -- is the register selected by
+  // Rn of the RTL's own WAITT compare (waitt_diff) -- is the register selected by
   // imem_data[8:6] (the ISA's WAIT.rn/rt field, isa/isa.yaml layouts.WAIT),
   // R0 reading as zero. It deliberately names imem_data[8:6] rather than the
   // internal w_rt wire: an earlier version restated rt_v in terms of w_rt
@@ -236,6 +275,33 @@ module pe_core (
   // used to be covered only by test/test_diff.py.
   always @(posedge clk)
     assert(rt_v == ((imem_data[8:6] == 3'd0) ? 16'd0 : regs[imem_data[8:6]]));
+
+  // T1c_release_exact_after_stall (independent, two-cycle; core v0.1): a
+  // WAITT that stalled in the previous cycle (active, no adv) and completes
+  // now, decoding the same instruction word, does so with T == Rn. This is
+  // what keeps the timing contract for on-time deadlines exact under the
+  // wrap-safe rule: T1 alone only says "T - Rn < 32768". It relies on two
+  // facts not stated here (formal/README.md, hypotheses of T1c): T moves by
+  // at most one tick per cycle -- true of the real pe_timebase that
+  // core_props.v instantiates, whose t_out either holds or increments (the
+  // timebase tasks prove the same fact on their own harness) -- and the
+  // instruction word does not change under a stalled pc, which the
+  // antecedent requires because core_props.v's imem_data is free every
+  // cycle (on the chip pe_imem_ff returns the same word for the same
+  // address). Rn itself cannot change: nothing writes a register in a
+  // cycle without adv.
+  always @(posedge clk)
+    if (f_past_valid && $past(rst_n) && !$past(core_reset) && $past(active) && $past(f_is_waitt) && !$past(adv) &&
+        (imem_data == $past(imem_data)) && adv)
+      assert(t_in == f_rn);
+
+  // T1f_waitt_keeps_flags (independent, two-cycle; core v0.1): a cycle in
+  // which the core executed a WAITT -- completing (late or on time) or
+  // stalling -- leaves {fto, fc, fz} unchanged. isa.yaml: WAITT leaves Z,
+  // C and TO untouched; a late WAITT just continues (no miss flag).
+  always @(posedge clk)
+    if (f_past_valid && $past(rst_n) && !$past(core_reset) && $past(active) && $past(f_is_waitt))
+      assert({fto, fc, fz} == $past({fto, fc, fz}));
 
   // T2_static_timing (part b, independent -- the successor address stated
   // WITHOUT the RTL's own next_pc wire): whenever adv was 1 in the previous
@@ -304,6 +370,17 @@ module pe_core (
   always @(posedge clk)
     if (active && is_wait && is_timed && wait_active && (t_in == wdead))
       assert(adv);
+
+  // T4c_timed_to_equiv (core v0.1; equivalence of the simplified timeout
+  // completion): timed_to, now wait_active ? (t_in == wdead) : (tmo == 0)
+  // with the adder only on the wdead capture path, equals v0's
+  // t_in == (wait_active ? wdead : t_in + timeout) in every state -- the
+  // timeout taken from the port bits with the R0 -> 65535 rule, as in P4,
+  // not from the RTL's tmo wire. (In the first cycle T == T + timeout
+  // exactly when the timeout is 0 mod 2^16.)
+  wire [15:0] f_tmo = (imem_data[8:6] == 3'd0) ? 16'hFFFF : regs[imem_data[8:6]];
+  always @(posedge clk)
+    assert(timed_to == (t_in == (wait_active ? wdead : t_in + f_tmo)));
 
   // T5_side_effects_only_when_active: the host/GPIO side-effect strobes this
   // module drives are all low whenever active is low (halted, RUN low, or
@@ -378,6 +455,15 @@ module pe_core (
     if (rst_n && f_past_valid)
       cover(f_waitt_stall_seen && (pc == f_waitt_stall_pc) && (ir == f_waitt_stall_ir) &&
             active && is_wait && (w_sub == `ISA_WAIT_WAITT) && adv && (t_in == rt_v));
+
+  // WAITT late release (core v0.1): after reset, a WAITT completes in its
+  // first cycle with T strictly past its deadline (T - Rn in 1..32767) --
+  // the wrap-safe behaviour is reachable, so T1e's "completes" half is not
+  // vacuous. Unreachable under v0's equality rule (formal/README.md,
+  // mutation W1).
+  always @(posedge clk)
+    if (rst_n && f_past_valid && $past(rst_n))
+      cover(active && f_is_waitt && !wait_active && adv && (f_diff != 16'd0) && (f_diff < 16'h8000));
 
   // Timed-wait timeout: a formal-only auxiliary register latches when a
   // timed wait (WAITP/WAITF/WAITL) genuinely *starts* post-reset (the cycle

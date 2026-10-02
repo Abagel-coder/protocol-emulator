@@ -117,7 +117,10 @@ from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge
 from tools import isa_defs as D
 from tools.sim import Sim
 
-N_PROGRAMS = int(os.environ.get("DIFF_PROGRAMS", "200"))    # 200 x 1500 cycles ~ 15 s (Icarus); 25 let a stack-depth mutant survive (final-review-verif.md M2)
+# 200 x 1500 cycles ~ 15 s (Icarus). 25 let a stack-depth mutant survive (final-review-verif.md M2); so
+# does 200 since WAITT reseeded every stream in core v0.1 (it dies at program 369), which is why
+# test_core.py's call_stack_depth_4_overflow_and_ret_on_empty pins the stack depth directly.
+N_PROGRAMS = int(os.environ.get("DIFF_PROGRAMS", "200"))
 N_CYCLES   = int(os.environ.get("DIFF_CYCLES", "1500"))
 IMEM_WORDS = 64
 

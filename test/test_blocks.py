@@ -1,3 +1,4 @@
+import random
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge
@@ -41,3 +42,74 @@ async def gpio_input_sync_two_cycles(dut):
     await RisingEdge(dut.clk); await FallingEdge(dut.clk); assert int(dut.ui_sync.value) == 0x0F
     assert int(dut.ui_prev.value) == 0x00
     await RisingEdge(dut.clk); await FallingEdge(dut.clk); assert int(dut.ui_prev.value) == 0x0F
+
+async def imem_write(dut, addr, data):
+    """One host write, clocked at the next rising edge (active must be 0 for it to land)."""
+    dut.im_wr_en.value = 1; dut.im_waddr.value = addr; dut.im_wdata.value = data
+    await RisingEdge(dut.clk); dut.im_wr_en.value = 0
+
+async def imem_fill(dut, words):
+    for a, w in enumerate(words): await imem_write(dut, a, w)
+
+async def imem_read(dut, addr):
+    """Present addr, clock once, sample both outputs after the edge."""
+    dut.im_raddr.value = addr; await RisingEdge(dut.clk); await FallingEdge(dut.clk)
+    return int(dut.im_rdata_m.value), int(dut.im_rdata_f.value)
+
+@cocotb.test()
+async def imem_512_words_read_back_and_alias_bit9(dut):
+    """All 512 words are distinct and readable; raddr/waddr bit 9 is ignored (512+k reads k)."""
+    await start(dut)
+    words = [(a * 0x9E37 + 0x1234) & 0xFFFF for a in range(512)]
+    await imem_fill(dut, words)
+    for a in [0, 1, 63, 64, 255, 256, 511, 512 + 5, 1023]:
+        m, f = await imem_read(dut, a)
+        assert m == words[a % 512] and f == words[a % 512], (a, hex(m), hex(f))
+
+@cocotb.test()
+async def imem_write_while_active_is_dropped_and_reported(dut):
+    """A write with active=1 changes nothing and pulses wr_dropped for exactly that cycle; the
+    same write with active=0 lands."""
+    await start(dut)
+    await imem_fill(dut, [0x1111] * 512)
+    dut.im_active.value = 1
+    dut.im_wr_en.value = 1; dut.im_waddr.value = 7; dut.im_wdata.value = 0x2222
+    await FallingEdge(dut.clk)
+    assert int(dut.im_drop_m.value) == 1 and int(dut.im_drop_f.value) == 1
+    await RisingEdge(dut.clk); dut.im_wr_en.value = 0
+    await FallingEdge(dut.clk)
+    assert int(dut.im_drop_m.value) == 0 and int(dut.im_drop_f.value) == 0
+    dut.im_active.value = 0
+    assert await imem_read(dut, 7) == (0x1111, 0x1111), "a write while active must be dropped"
+    await imem_write(dut, 7, 0x2222)
+    assert await imem_read(dut, 7) == (0x2222, 0x2222)
+
+@cocotb.test()
+async def imem_read_output_holds_during_a_write(dut):
+    """A paused core keeps reading its stalled pc. A host write to that same address must not
+    change the output register during the write cycle (no write-through); the next read cycle
+    returns the new word."""
+    await start(dut)
+    await imem_fill(dut, list(range(512)))
+    assert await imem_read(dut, 100) == (100, 100)
+    await imem_write(dut, 100, 0xBEEF)                 # raddr is still 100
+    await FallingEdge(dut.clk)
+    assert (int(dut.im_rdata_m.value), int(dut.im_rdata_f.value)) == (100, 100), "output must hold through the write"
+    await RisingEdge(dut.clk); await FallingEdge(dut.clk)
+    assert (int(dut.im_rdata_m.value), int(dut.im_rdata_f.value)) == (0xBEEF, 0xBEEF), "the read after the write sees the new word"
+
+@cocotb.test()
+async def imem_macro_and_flops_agree_under_random_traffic(dut):
+    """2,000 random cycles of reads, writes and active toggles: both implementations must give
+    the same rdata and wr_dropped every cycle."""
+    await start(dut)
+    rng = random.Random(7)
+    await imem_fill(dut, [rng.randrange(65536) for _ in range(512)])
+    for _ in range(2000):
+        dut.im_active.value = int(rng.random() < 0.5)
+        dut.im_wr_en.value = int(rng.random() < 0.3)
+        dut.im_waddr.value = rng.randrange(1024); dut.im_wdata.value = rng.randrange(65536)
+        dut.im_raddr.value = rng.randrange(1024)
+        await RisingEdge(dut.clk); await FallingEdge(dut.clk)
+        assert int(dut.im_rdata_m.value) == int(dut.im_rdata_f.value)
+        assert int(dut.im_drop_m.value) == int(dut.im_drop_f.value)

@@ -13,4 +13,11 @@ module tb_blocks;
              .ui_prev(ui_prev), .uio_prev(uio_prev), .wr_en(wr_en), .wr_op(wr_op), .wr_bank(wr_bank), .wr_mask(wr_mask),
              .pin_en(pin_en), .pin_bank(pin_bank), .pin_idx(pin_idx), .pin_val(pin_val),
              .uo_out(uo_out), .uio_out(uio_out), .uio_oe(uio_oe));
+  // pe_imem: both implementations side by side on identical inputs (test_blocks.py imem_* tests)
+  reg im_active = 0, im_wr_en = 0; reg [9:0] im_raddr = 0, im_waddr = 0; reg [15:0] im_wdata = 0;
+  wire [15:0] im_rdata_m, im_rdata_f; wire im_drop_m, im_drop_f;
+  pe_imem #(.IMPL("MACRO")) im_m (.clk(clk), .active(im_active), .raddr(im_raddr), .rdata(im_rdata_m),
+                                  .wr_en(im_wr_en), .waddr(im_waddr), .wdata(im_wdata), .wr_dropped(im_drop_m));
+  pe_imem #(.IMPL("FLOPS")) im_f (.clk(clk), .active(im_active), .raddr(im_raddr), .rdata(im_rdata_f),
+                                  .wr_en(im_wr_en), .waddr(im_waddr), .wdata(im_wdata), .wr_dropped(im_drop_f));
 endmodule

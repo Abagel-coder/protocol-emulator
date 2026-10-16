@@ -3,6 +3,7 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge
 from tools.asm import assemble, assemble_file
+from imem_load import load_imem
 from tests.test_sim import (WAITT_TO_PROGRAM, waitt_program,   # the same programs the oracle's tests run
                             WAITT_WRAP_PROGRAM, WAITT_WRAP_T0, ZERO_TIMEOUT_WAITS, ZERO_TIMEOUT_UO,
                             zero_timeout_program)
@@ -11,9 +12,6 @@ FIRMWARE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "firmw
 
 _clk_task = None            # one clock driver per test: cocotb cancels it when the test ends
 
-def load(dut, words):
-    for i in range(64): dut.u_imem.mem[i].value = words[i] if i < len(words) else 0
-
 async def boot(dut, prog, prescale=0):
     """Load `prog` (assembly source, or a list of raw 16-bit words), reset, raise RUN.
     Starts the clock once per test: a test that boots twice must not end up with two
@@ -21,7 +19,7 @@ async def boot(dut, prog, prescale=0):
     global _clk_task
     if _clk_task is None or _clk_task.done():
         _clk_task = Clock(dut.clk, 20, unit="ns").start()
-    load(dut, assemble(prog) if isinstance(prog, str) else prog)
+    load_imem(dut.u_imem, assemble(prog) if isinstance(prog, str) else prog)
     dut.prescale.value = prescale; dut.run.value = 0
     dut.rst_n.value = 0; await ClockCycles(dut.clk, 3); dut.rst_n.value = 1; await ClockCycles(dut.clk, 2)
     dut.run.value = 1; await RisingEdge(dut.clk)        # cycle 0 starts after this edge

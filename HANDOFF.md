@@ -16,7 +16,7 @@ Written 2026-09-18, updated 2026-09-22 after the whole-branch review and its fix
 | Research: brief, prior art, verification, novelty decisions N1–N10 | `docs/research/` |
 | ISA source of truth and generated reference | `isa/isa.yaml`, `docs/isa.md` |
 | Tools: generator, assembler, cycle-accurate oracle, host encoders | `tools/gen_isa.py`, `tools/asm.py`, `tools/sim.py`, `tools/host.py` |
-| RTL | `src/project.v` (top), `src/pe_core.v`, `pe_gpio.v`, `pe_timebase.v`, `pe_imem_ff.v`, `pe_fifo.v`, `pe_host_spi.v` (exactly `info.yaml`'s `source_files`); the warm-up UART kept as a timing reference is test-only and lives in `test/uart_tx_ref.v` |
+| RTL | `src/project.v` (top), `src/pe_core.v`, `pe_gpio.v`, `pe_timebase.v`, `pe_imem.v`, `pe_fifo.v`, `pe_host_spi.v` (exactly `info.yaml`'s `source_files`); `src/RM_IHPSG13_1P_512x16_c2_bm_bist.v` is the SRAM macro's port-only blackbox for synthesis (not a source file: the flow places the macro) and `src/pdn_cfg.tcl` the flow's power-grid script; the macro's simulation models are vendored in `test/models/`; the warm-up UART kept as a timing reference is test-only and lives in `test/uart_tx_ref.v` |
 | Firmware | `firmware/blink.s`, `firmware/uart_tx.s` |
 | Tests | `tests/` (pytest), `test/` (cocotb: `Makefile` = host/top level, `Makefile.core`, `Makefile.blocks`, `Makefile.uartfw`) |
 | Formal proofs and their honest scope | `formal/core.sby`, `formal/core_props.v`, `formal/timebase_props.v`, `formal/README.md` |
@@ -94,7 +94,7 @@ Status after the fix wave (2026-09-22): fixed -- unused `importlib`; assembler d
 - Host SPI: mode 0, MSB first, SCK ≤ clk/16, commands 0x01–0x07 (table in `docs/info.md`); status bit4 = host→core FIFO full.
 - `Sim.step()` returns `(cycle, uo, uio_out, uio_oe, halted)`.
 - Generated files (`docs/isa.md`, `tools/isa_defs.py`, `src/isa_defs.vh`) change only via `isa/isa.yaml` + `.venv/bin/python tools/gen_isa.py`; CI fails on drift of those three. The field slices in `src/pe_core.v` are hand-typed and are checked only by the differential fuzzer.
-- The instruction memory is 64 words (addresses and jump targets alias modulo 64; the assembler refuses larger programs; zero-fill before RUN). `WAITT` is wrap-safe (core v0.1): it completes once bit 15 of `T - Rn` is 0 -- a deadline up to 32,768 ticks ahead releases exactly at `T == Rn`, one already passed (up to 32,767 behind) at once, flags untouched; keep deadlines under 32,768 ticks ahead. Timed waits keep the equality compare on the `T + timeout` they capture when they start, so a timeout that passes while RUN is low waits for `T` to come round again (`docs/info.md`).
+- The instruction memory is 512 words, one IHP SRAM macro (addresses and jump targets alias modulo 512; the assembler refuses larger programs; zero-fill before RUN). Its single port is shared with the core's fetch: a `WRITE_IMEM` word that arrives while the core is active is dropped and sets `READ_STATUS` bit 5 until the next `WRITE_CTRL` reset, so pause or halt the core before loading. `WAITT` is wrap-safe (core v0.1): it completes once bit 15 of `T - Rn` is 0 -- a deadline up to 32,768 ticks ahead releases exactly at `T == Rn`, one already passed (up to 32,767 behind) at once, flags untouched; keep deadlines under 32,768 ticks ahead. Timed waits keep the equality compare on the `T + timeout` they capture when they start, so a timeout that passes while RUN is low waits for `T` to come round again (`docs/info.md`).
 
 ## Environment on this Mac
 

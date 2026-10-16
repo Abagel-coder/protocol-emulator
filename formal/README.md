@@ -214,8 +214,12 @@ nobody mistakes it for a property of `pe_core.v` alone:
   `T == Rn` into the "behind" half and release with `T != Rn`.
 - **H3 (as for T4): the instruction word under a stalled `pc` does not change.** `imem_data` is
   free every cycle in `core_props.v`, so T1c requires `imem_data == $past(imem_data)` in its
-  antecedent. On the chip `pe_imem_ff` returns the same word for the same address -- unless the
-  host rewrites that word over SPI during the stall, which T1c does not cover.
+  antecedent. On the chip `pe_imem` returns the same word for the same address, and since the SRAM
+  instruction memory this is enforced by hardware rather than by host discipline: `pe_imem` drops
+  a host write that arrives while the core is active (running, including stalled in a wait) and
+  reports it in `READ_STATUS` bit 5, so the word under an active stall cannot change. Writes are
+  accepted only while the core is inactive (paused, halted or in reset); a word rewritten while
+  the core is paused is the one it decodes when RUN returns.
 
 `Rn` itself needs no hypothesis: no register is written in a cycle without `adv`, which the
 solver sees directly. T1, T1d, T1e and T1f need neither hypothesis (T1/T1d/T1e are same-cycle;
@@ -280,8 +284,9 @@ exactly three hypotheses about the environment beyond what facts 1-3 state:
   models `imem_data` as a free input every cycle (see "Setup"), not a function of `imem_addr`.
   Nothing proved in this proof set rules out the *harness* re-decoding the stalled `pc` as a
   different instruction (not a wait at all, say) on some later cycle. On the real chip this is
-  guaranteed by the synchronous-read instruction memory `pe_imem_ff`, which always returns the
-  same word for the same address -- not by anything proved here.
+  guaranteed by the synchronous-read instruction memory `pe_imem`, which always returns the
+  same word for the same address and drops host writes while the core is active (a hardware rule
+  since the SRAM instruction memory, no longer host discipline) -- not by anything proved here.
 
 Because all three hypotheses are about the *environment* during the wait rather than about the
 RTL itself, and because SymbiYosys's BMC/k-induction prove safety invariants, not
@@ -325,7 +330,7 @@ judged out of scope.
   separately-proved facts (1, 1a, P4, 2, 3), not one machine-checked property.
 - **The proof harness's instruction stream is looser than real memory.** `imem_data` is free
   every cycle in `core_props.v`, not a deterministic function of `imem_addr` -- the real
-  `pe_imem_ff` always returns the same word for the same address. This makes every property
+  `pe_imem` always returns the same word for the same address. This makes every property
   proved here strictly *stronger* (true for every possible memory contents, including
   pathological ones), but it also means a cover witness can show the *same pc* decoding as
   different instruction words across consecutive cycles (see "Cover witnesses" below for a

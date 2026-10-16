@@ -285,9 +285,9 @@ module pe_core (
   // timebase tasks prove the same fact on their own harness) -- and the
   // instruction word does not change under a stalled pc, which the
   // antecedent requires because core_props.v's imem_data is free every
-  // cycle (on the chip pe_imem_ff returns the same word for the same
-  // address). Rn itself cannot change: nothing writes a register in a
-  // cycle without adv.
+  // cycle (on the chip pe_imem returns the same word for the same
+  // address and drops host writes while the core is active). Rn itself
+  // cannot change: nothing writes a register in a cycle without adv.
   always @(posedge clk)
     if (f_past_valid && $past(rst_n) && !$past(core_reset) && $past(active) && $past(f_is_waitt) && !$past(adv) &&
         (imem_data == $past(imem_data)) && adv)

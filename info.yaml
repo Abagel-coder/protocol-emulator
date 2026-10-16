@@ -20,7 +20,7 @@ project:
     - "project.v"
     - "pe_timebase.v"
     - "pe_gpio.v"
-    - "pe_imem_ff.v"
+    - "pe_imem.v"
     - "pe_fifo.v"
     - "pe_core.v"
     - "pe_host_spi.v"

@@ -156,21 +156,25 @@ async def write_imem_survives_bidx_saturation(dut):
     """Finding 7: bidx saturates at 0xFF; the old C_IMEM hi/lo byte selection used bidx[0]
     parity, which gets stuck at a constant value forever once bidx saturates, silently
     breaking WRITE_IMEM for any single transaction whose data crosses the bidx=0xFF boundary
-    (word index 126 onward, counting from bidx=0 at the command byte). This sends 128 words in
-    one CS_n-active transaction; the second 64 overwrite IMEM addresses 0..63 (the memory is 64
-    words, so word 64+k lands at address k): `JMP 63` at address 0, NOP in its delay slot at 1,
-    HALT at 2..62 and `TGL UO, 0x01` at address 63 (word 127, the last one sent, well past the
-    saturation point). Only if word 127 really reached address 63 does the core run the 3-cycle
-    loop 0 -> 1 -> 63 -> 0 (JMP, slot, TGL; pc wraps modulo 64) and toggle uo[0] every 3 cycles;
-    a word that landed anywhere else (mutant M6: imem_waddr stops incrementing once bidx sticks
-    at 0xFF, so words 125..127 all land on address 61) leaves NOP/HALT at 63 and the pin never
-    moves. Pin-only, so it holds identically in gate-level simulation."""
+    (word index 126 onward: the high byte of word k is byte 3 + 2k, counting from bidx=0 at the
+    command byte). This sends 129 words in one CS_n-active transaction: `JMP 126` at address 0,
+    NOP in its delay slot at 1, HALT at 2..125, `TGL UO, 0x01` at 126, `JMP 0` at 127 and a NOP
+    delay slot at 128 -- the last three words are past the saturation point. Only if they really
+    reached addresses 126..128 does the core run the 5-cycle loop 0 -> 1 -> 126 -> 127 -> 128 -> 0
+    (JMP, slot, TGL, JMP, slot) and toggle uo[0] every 5 cycles; a word that landed anywhere else
+    (mutant M6: imem_waddr stops incrementing once bidx sticks at 0xFF, so words 125..128 all land
+    on address 125) leaves HALT or an unwritten word at 126 and the pin never moves. Pin-only, so it
+    holds identically in gate-level simulation."""
     spi = await start(dut)
     fast = SpiMaster(dut, other_bits=0x00, half_period_ns=160)   # minimum half period (8 core clocks); keeps this long transfer fast
-    jmp63, nop, halt, tgl = assemble("JMP 63")[0], 0, assemble("HALT")[0], assemble("TGL UO, 0x01")[0]
-    second = [jmp63, nop] + [halt] * 61 + [tgl]                   # words 64..127 -> addresses 0..63
-    assert len(second) == 64
-    words = [nop] * 64 + second
+    nop, halt = 0, assemble("HALT")[0]
+    words = [nop] * 128
+    words[0] = assemble("JMP 126")[0]
+    words[2:126] = [halt] * 124
+    words[126] = assemble("TGL UO, 0x01")[0]
+    words[127] = assemble("JMP 0")[0]
+    words += [nop]                                                # 128: JMP 0's delay slot, a written NOP
+    assert len(words) == 129
     await fast.xfer(encode_write_imem(0, words))
     assert int(dut.uo_out.value) & 1 == 0, "uo[0] must start low (no TGL has executed yet)"
     await spi.xfer(encode_write_ctrl(run=True))
@@ -181,9 +185,9 @@ async def write_imem_survives_bidx_saturation(dut):
         cur = int(dut.uo_out.value) & 1
         if cur != prev:
             edges.append(cycle); prev = cur
-    assert len(edges) == 6, ("no 0->1->63 toggle loop: word 127 is not at IMEM address 63", edges)
+    assert len(edges) == 6, ("no 0->1->126->127->128 toggle loop: words 126..128 are not at their own addresses", edges)
     intervals = [b - a for a, b in zip(edges, edges[1:])]
-    assert all(i == 3 for i in intervals), ("toggle interval is not the 3-cycle JMP/slot/TGL loop", intervals)
+    assert all(i == 5 for i in intervals), ("toggle interval is not the 5-cycle JMP/slot/TGL/JMP/slot loop", intervals)
 
 @cocotb.test()
 async def h2c_fifo_full_reported_and_protected(dut):
@@ -564,7 +568,63 @@ async def post_reset_state_and_running_bit(dut):
     await spi.xfer(encode_write_ctrl(run=True))
     st, _, _ = await status(spi)
     assert st & 0x03 == 0x02, ("running bit not set while the blink loop runs", st)
+    await spi.xfer(encode_write_ctrl(run=False))                 # pause first: a WRITE_IMEM while the core is active is dropped
     await spi.xfer(encode_write_imem(0, assemble("HALT\nNOP")))
     await spi.xfer(encode_write_ctrl(run=True, reset=True)); await ClockCycles(dut.clk, 10)
     st, _, _ = await status(spi)
     assert st & 0x03 == 0x01, ("halted core still reports running", st)
+
+@cocotb.test()
+async def program_beyond_word_63_runs(dut):
+    """The instruction memory is 512 words (core v0 had 64). A program whose loop lives at
+    address 300 -- `JMP 300` at 0 with its delay slot at 1, then `TGL UO, 0x01; JMP 300; NOP` at
+    300..302 -- must toggle uo[0] every 3 cycles. One WRITE_IMEM of 303 words (tools/asm.py
+    zero-fills the .org gap; the gap 2..299 is overwritten with HALT here). On a 64-word memory the
+    words alias modulo 64 and the last ones written win: address 0 holds word 256, a HALT, so the
+    core halts at once and the pin never moves. Pin-only."""
+    spi = await start(dut)
+    fast = SpiMaster(dut, other_bits=0x00, half_period_ns=160)   # minimum half period (8 core clocks); keeps this long transfer fast
+    words = assemble("JMP 300\nNOP\n.org 300\nTGL UO, 0x01\nJMP 300\nNOP")
+    assert len(words) == 303
+    words[2:300] = [assemble("HALT")[0]] * 298
+    await fast.xfer(encode_write_imem(0, words))
+    assert int(dut.uo_out.value) & 1 == 0, "uo[0] must start low (no TGL has executed yet)"
+    await spi.xfer(encode_write_ctrl(run=True))
+    prev = int(dut.uo_out.value) & 1
+    edges, cycle = [], 0
+    while len(edges) < 6 and cycle < 400:
+        await FallingEdge(dut.clk); cycle += 1
+        cur = int(dut.uo_out.value) & 1
+        if cur != prev:
+            edges.append(cycle); prev = cur
+    assert len(edges) == 6, ("no 300->301->302 toggle loop: the program beyond word 63 did not run", edges)
+    intervals = [b - a for a, b in zip(edges, edges[1:])]
+    assert all(i == 3 for i in intervals), ("toggle interval is not the 3-cycle TGL/JMP/slot loop", intervals)
+
+@cocotb.test()
+async def write_imem_while_running_is_dropped_and_flagged(dut):
+    """docs/info.md: the SRAM has one port, shared by the core's fetch and the host's writes, so a
+    WRITE_IMEM word that arrives while the core is active is dropped, and READ_STATUS byte 1 bit 5
+    records it until the next WRITE_CTRL reset. Run `JMP 0; NOP` (an endless loop), write a HALT
+    over address 0: the core must keep running (the write was dropped) and bit 5 must be set. Pause
+    (run=0), write `HALT; NOP` (accepted: the core is inactive), restart with run=1 + reset: the core
+    halts and bit 5 reads clear (the reset cleared it). Pin-level: SPI only."""
+    spi = await start(dut)
+    halt = assemble("HALT")[0]
+    await spi.xfer(encode_write_imem(0, assemble("JMP 0\nNOP")))
+    await spi.xfer(encode_write_ctrl(run=True))
+    st, _, _ = await status(spi)
+    assert st & 0x02 == 0x02, ("core not running the JMP 0 loop", st)
+    assert st & 0x20 == 0, ("imem write dropped (bit 5) set before any write while running", st)
+    await spi.xfer(encode_write_imem(0, [halt]))                  # arrives while the core is active: dropped
+    await ClockCycles(dut.clk, 20)
+    st, _, _ = await status(spi)
+    assert st & 0x03 == 0x02, ("the HALT written while running landed: the core stopped", st)
+    assert st & 0x20 == 0x20, ("a WRITE_IMEM dropped while running is not reported in bit 5", st)
+    await spi.xfer(encode_write_ctrl(run=False))                  # pause: writes are accepted again
+    await spi.xfer(encode_write_imem(0, [halt, 0]))
+    await spi.xfer(encode_write_ctrl(run=True, reset=True))
+    await ClockCycles(dut.clk, 20)
+    st, _, _ = await status(spi)
+    assert st & 0x01 == 0x01, ("the HALT written while paused did not land", st)
+    assert st & 0x20 == 0, ("bit 5 not cleared by WRITE_CTRL's reset bit", st)

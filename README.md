@@ -117,7 +117,7 @@ Every workflow runs on every push (`.github/workflows/`). What each one actually
 - `gds` — hardening with LibreLane via `tt-gds-action@ihp-cmos5l`, the Tiny Tapeout precheck, the gate-level run of `test/Makefile` (`GATES=yes`, host suite only) against the routed netlist, and the GDS viewer.
 - `docs` — the datasheet build from `docs/info.md`.
 
-Not run in CI: Verilator lint (`verilator --lint-only -Wall -Wno-DECLFILENAME -Isrc src/*.v --top-module tt_um_abagel_coder_protocol_emulator`, run locally), and local hardening.
+Not run in CI: Verilator lint (`verilator --lint-only -Wall -Wno-DECLFILENAME -Isrc src/project.v src/pe_timebase.v src/pe_gpio.v src/pe_imem.v src/pe_fifo.v src/pe_core.v src/pe_host_spi.v src/RM_IHPSG13_1P_512x16_c2_bm_bist.v --top-module tt_um_abagel_coder_protocol_emulator`, run locally: the seven source files plus the SRAM macro's port-only blackbox), and local hardening.
 
 ## License
 

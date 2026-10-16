@@ -9,7 +9,7 @@ def _check(name, value, bits):
 def encode_write_imem(addr, words):
     """WRITE_IMEM: 10-bit start address, then 16-bit words. Out-of-range values raise
     ValueError rather than being masked (a 17-bit word would otherwise load silently corrupted;
-    note the chip's 64-word memory aliases addresses modulo 64, docs/info.md)."""
+    note the chip's 512-word memory aliases addresses modulo 512, docs/info.md)."""
     _check("addr", addr, 10)
     out = bytes([CMD_WRITE_IMEM, (addr >> 8) & 3, addr & 0xFF])
     for i, w in enumerate(words):

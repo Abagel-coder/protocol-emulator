@@ -1,6 +1,9 @@
 `default_nettype none
 // Mode-0 SPI slave register port. Commands: see docs (WRITE_IMEM 1, WRITE_CTRL 2, READ_STATUS 3,
 // PUSH_FIFO 4, POP_FIFO 5, READ_GPIO 6, WRITE_PRESCALE 7). SCK <= clk/16.
+// WRITE_IMEM words go to pe_imem, which drops a word that arrives while the core is active and
+// pulses imem_wr_dropped; this module keeps that as the sticky READ_STATUS byte 1 bit 5 (imem_dropped),
+// cleared by WRITE_CTRL's reset bit and by rst_n.
 // CS_n timing: CS_n must stay asserted through the SPI clock edge that samples the last bit of
 // a byte (inherent to the protocol -- that edge is what makes the byte "received"). It may be
 // raised immediately afterward, even on the very next core clock cycle, with no additional
@@ -17,6 +20,7 @@ module pe_host_spi (
     output reg         imem_wr,
     output reg  [9:0]  imem_waddr,
     output reg  [15:0] imem_wdata,
+    input  wire        imem_wr_dropped,
     output reg         ctrl_run,
     output reg         core_reset,
     output reg  [7:0]  prescale,
@@ -50,6 +54,7 @@ module pe_host_spi (
   wire cs_start = !cs_s[1] && cs_s[2];
   reg [7:0] rx_sh, tx_sh, rx_byte, cmd, hi_byte; reg [2:0] bitcnt; reg [7:0] bidx; reg byte_done;
   reg [15:0] pop_word;
+  reg imem_dropped;
   // pair_phase tracks hi/lo byte selection for WRITE_IMEM data words independent of bidx:
   // bidx saturates at 0xFF for the response mux (fine there -- no read command needs more than
   // ~5 bytes), but a WRITE_IMEM transaction can carry far more than 255 payload bytes, and once
@@ -63,7 +68,7 @@ module pe_host_spi (
   always @* begin
     resp = 8'd0;
     case (cmd)
-      C_STAT: case (bidx) 8'd1: resp = {3'd0, h2c_full, !c2h_valid, h2c_valid, running, halted}; 8'd2: resp = {6'd0, pc[9:8]}; 8'd3: resp = pc[7:0]; 8'd4: resp = {5'd0, flags}; default: resp = 8'd0; endcase
+      C_STAT: case (bidx) 8'd1: resp = {2'd0, imem_dropped, h2c_full, !c2h_valid, h2c_valid, running, halted}; 8'd2: resp = {6'd0, pc[9:8]}; 8'd3: resp = pc[7:0]; 8'd4: resp = {5'd0, flags}; default: resp = 8'd0; endcase
       C_POP:  case (bidx) 8'd1: resp = pop_word[15:8]; 8'd2: resp = pop_word[7:0]; default: resp = 8'd0; endcase
       C_GPIO: case (bidx) 8'd1: resp = ui_in; 8'd2: resp = uio_in; 8'd3: resp = {1'b0, uo_out}; 8'd4: resp = uio_out; 8'd5: resp = uio_oe; default: resp = 8'd0; endcase
       default: resp = 8'd0;
@@ -74,6 +79,7 @@ module pe_host_spi (
       rx_sh <= 8'd0; tx_sh <= 8'd0; rx_byte <= 8'd0; cmd <= 8'd0; hi_byte <= 8'd0; bitcnt <= 3'd0; bidx <= 8'd0; byte_done <= 1'b0;
       imem_wr <= 1'b0; imem_waddr <= 10'd0; imem_wdata <= 16'd0; ctrl_run <= 1'b0; core_reset <= 1'b0; prescale <= 8'd0;
       h2c_push <= 1'b0; h2c_wdata <= 16'd0; c2h_pop <= 1'b0; pop_word <= 16'd0; pair_phase <= 1'b0;
+      imem_dropped <= 1'b0;
     end else begin
       imem_wr <= 1'b0; core_reset <= 1'b0; h2c_push <= 1'b0; c2h_pop <= 1'b0; byte_done <= 1'b0;
       if (!cs_act) begin
@@ -87,6 +93,11 @@ module pe_host_spi (
         if (sck_fall) tx_sh <= (bitcnt == 3'd0) ? resp : {tx_sh[6:0], 1'b0};
         if (imem_wr) imem_waddr <= imem_waddr + 10'd1;
       end
+      // Sticky record of a WRITE_IMEM word that arrived while the core was active and was dropped by
+      // pe_imem (READ_STATUS byte 1 bit 5). Cleared by WRITE_CTRL's reset bit; a drop in the same
+      // cycle as the clear wins.
+      if (core_reset) imem_dropped <= 1'b0;
+      if (imem_wr_dropped) imem_dropped <= 1'b1;
       // byte_done processing is deliberately NOT gated by cs_act: cs_act is itself a
       // synchronised (2-cycle-delayed) view of cs_n, and byte_done is a one-cycle pulse
       // that fires one cycle after the 8th sck_rise. If the host drops CS_n within a

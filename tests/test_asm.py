@@ -57,14 +57,15 @@ def test_signed_branch_offset_boundaries():
     with pytest.raises(AsmError, match="simm6=-33"): w("BFLAG RXV, 1, -33")
 
 def test_program_size_limit():
-    # core v0's instruction memory is 64 words: address 63 is the last one, .org 64 names an
-    # address that does not exist, and a 65th word is an error (silently wrapping modulo 64 on
-    # the chip is what the check prevents). max_words=None lifts the limit to the 10-bit PC.
-    assert len(w(".org 63\nNOP")) == 64
-    assert len(w("NOP\n" * 64)) == 64
-    with pytest.raises(AsmError, match="line 1: .org 0x40 is outside the 64-word"): w(".org 64\nNOP")
-    with pytest.raises(AsmError, match="line 65: program does not fit"): w("NOP\n" * 65)
-    assert len(assemble("NOP\n" * 65, max_words=None)) == 65
+    # the instruction memory is 512 words (src/pe_imem.v): address 511 is the last one, .org 512 names
+    # an address that does not exist, and a 513th word is an error (silently aliasing modulo 512 on
+    # the chip would be a trap)
+    assert len(w(".org 511\nNOP")) == 512
+    assert len(w("NOP\n" * 512)) == 512
+    with pytest.raises(AsmError, match="line 1: .org 0x200 is outside the 512-word"): w(".org 512\nNOP")
+    with pytest.raises(AsmError): w("NOP\n" * 513)
+    # max_words=None lifts the limit to the 10-bit PC
+    assert len(assemble("NOP\n" * 513, max_words=None)) == 513
     with pytest.raises(AsmError, match="beyond the 1024-word"): assemble(".org 1023\nNOP\nNOP", max_words=None)
     with pytest.raises(AsmError, match="line 1: .org 0x1388 is outside"): assemble(".org 5000\nNOP", max_words=None)
 

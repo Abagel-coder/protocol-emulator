@@ -110,6 +110,23 @@ ahead (698 released exactly at T == Rn; 7 were still stalled when their program'
 the longest stall being 242 cycles) and 36 with the deadline equal to T. Those late and stalling
 WAITTs are what catch v0's equality rule and an inverted sign (RTL mutants W1/W2, program 1 of the
 default run) here as well as in the directed tests.
+
+Re-measured 2026-10-15 for the 512-word instruction memory (core v1; same oracle-only method, seeds
+and loop, default run of 200 programs x 1500 cycles). Programs are still PROG_WORDS = 64 words (the
+preamble plus 57 random words; JMP targets are drawn from 0..63) and are deposited with
+test/imem_load.py, which sets words 64..511 to 0 (NOP); Sim gets the same 512-word image. A relative
+branch can still leave the program (BR's simm9 reaches 256 words either way, and the 10-bit pc wraps),
+and a program that runs past word 63 now executes NOPs up to word 511 before the fetch address wraps
+back to word 0 (memory addresses alias modulo 512), where on the 64-word memory it re-entered word 0
+at once. That costs stimulus: 53.0% of
+the run's cycles fetch a NOP past word 63, and 151 of the 200 programs leave their 64 words at least
+once. Before (64 words) -> after (512 words): WAITP starts 1,078 -> 629 (zero-tick 5.2% -> 0.2%;
+completions 59.7% condition / 40.3% timeout -> 58.6% / 41.4%), WAITF starts 1,337 -> 599 (zero-tick
+10.4% -> 7.0%; 46.1% / 53.9% -> 40.0% / 60.0%), cycles stalled in a WAIT 32.2% -> 14.2%, WAITT
+executed 2,227 times in 69 programs -> 1,111 times in 49 (late 1,486 -> 835, stalling on a deadline
+ahead 705 -> 244, deadline equal to T 36 -> 32). The completion splits stay over the 25%-each
+target; W1 and W2 still fail in program 1 (cycles 527 and 17); the stack-depth mutant now first
+fails at program 617.
 """
 import os, random
 import cocotb
@@ -117,13 +134,15 @@ from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge
 from tools import isa_defs as D
 from tools.sim import Sim
+from imem_load import load_imem
 
-# 200 x 1500 cycles ~ 15 s (Icarus). 25 let a stack-depth mutant survive (final-review-verif.md M2); so
-# does 200 since WAITT reseeded every stream in core v0.1 (it dies at program 369), which is why
+# 200 x 1500 cycles ~ 28 s (Icarus, with the SRAM model). 25 let a stack-depth mutant survive (final-review-verif.md M2); so
+# does 200 since WAITT reseeded every stream in core v0.1 (it died at program 369; at program 617 since
+# the 512-word memory, see the docstring), which is why
 # test_core.py's call_stack_depth_4_overflow_and_ret_on_empty pins the stack depth directly.
 N_PROGRAMS = int(os.environ.get("DIFF_PROGRAMS", "200"))
 N_CYCLES   = int(os.environ.get("DIFF_CYCLES", "1500"))
-IMEM_WORDS = 64
+PROG_WORDS = 64     # generated program length; JMP targets are drawn from 0..63; the other 448 words are NOP (see the docstring)
 
 def rand_word(rng):
     """One random instruction as a list of words: one word, or for a WAITT usually two -- the
@@ -159,7 +178,7 @@ def rand_word(rng):
             w |= (rt << 6) | low6
     elif cls == "TIME": w |= (r(8) << 9) | (r(2) << 8) | r(256)
     elif cls == "BR":  w |= (r(8) << 9) | r(512)
-    elif cls == "JMP": w |= (r(2) << 11) | r(IMEM_WORDS)
+    elif cls == "JMP": w |= (r(2) << 11) | r(PROG_WORDS)
     elif cls == "BPIN": w |= (r(2) << 11) | (r(2) << 10) | (r(8) << 7) | r(128)
     elif cls == "BFLAG": w |= (r(2) << 11) | (r(32) << 6) | r(64)                  # flag: 0-31 (3-31 reserved)
     elif cls == "HOST": w |= (r(8) << 9) | (r(2) << 8)
@@ -185,12 +204,12 @@ async def rtl_matches_model_on_random_programs(dut):
     cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
     for n in range(N_PROGRAMS):
         rng = random.Random(1000 + n)
-        words = preamble_words(rng) + rand_words(rng, IMEM_WORDS - 7)
-        for i in range(IMEM_WORDS): dut.u_imem.mem[i].value = words[i]
+        words = preamble_words(rng) + rand_words(rng, PROG_WORDS - 7)
+        load_imem(dut.u_imem, words)            # the other 448 words read 0 = NOP
         dut.prescale.value = 0; dut.run.value = 0; dut.ui_in.value = 0; dut.uio_in.value = 0
         dut.rst_n.value = 0; await ClockCycles(dut.clk, 3); dut.rst_n.value = 1; await ClockCycles(dut.clk, 2)
         dut.run.value = 1; await RisingEdge(dut.clk)
-        sim = Sim(words, prescale=1, imem_words=IMEM_WORDS)
+        sim = Sim(words, prescale=1)            # the default 512-word memory, as on the chip
         hist = {}
         watched = None                          # (bank, pin) a live WAITP is watching, from the oracle's own decode only -- see module docstring
         for k in range(N_CYCLES):

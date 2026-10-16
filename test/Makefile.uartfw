@@ -12,7 +12,7 @@ SIM ?= icarus
 FST ?= -fst # Use more efficient FST format
 TOPLEVEL_LANG ?= verilog
 SRC_DIR = $(PWD)/../src
-PROJECT_SOURCES = project.v pe_timebase.v pe_gpio.v pe_imem_ff.v pe_fifo.v pe_core.v pe_host_spi.v
+PROJECT_SOURCES = project.v pe_timebase.v pe_gpio.v pe_imem.v pe_fifo.v pe_core.v pe_host_spi.v
 
 # Make tools.* importable from cocotb test modules:
 export PYTHONPATH := $(PWD)/..
@@ -21,6 +21,11 @@ export PYTHONPATH := $(PWD)/..
 # Gate-level simulation is test/Makefile (test_host), which drives only the top-level pins.
 SIM_BUILD				= sim_build/rtl
 VERILOG_SOURCES += $(addprefix $(SRC_DIR)/,$(PROJECT_SOURCES))
+# The instruction memory is an IHP SRAM macro; its simulation model (test/models, vendored from the
+# PDK) only instantiates the behavioural core under FUNCTIONAL. The gate-level netlist keeps the macro
+# as a black box, so GATES=yes needs the model too.
+VERILOG_SOURCES += $(PWD)/models/RM_IHPSG13_1P_core_behavioral_bm_bist.v $(PWD)/models/RM_IHPSG13_1P_512x16_c2_bm_bist.v
+COMPILE_ARGS    += -DFUNCTIONAL
 
 # Allow sharing configuration between design and testbench via `include`:
 COMPILE_ARGS 		+= -I$(SRC_DIR)

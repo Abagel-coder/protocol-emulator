@@ -12,7 +12,7 @@ You can also include images in this folder and reference them in the markdown. E
 Status (2026-09-18): core v0, hardened. The chip is a small deterministic CPU (`pe_core`) built for reading pins, writing pins, counting cycles and hitting exact timing, plus a timebase counter, a GPIO block, two host/core data FIFOs and an instruction memory, all wired together and loaded/controlled over a host SPI port (`pe_host_spi`). Data flow at reset: the host writes a program into the instruction memory over the SPI port, then starts the core; each cycle the core fetches from the instruction memory, executes (ALU, branches, pin reads/writes, waits keyed off the free-running timebase, or a push/pop of a host FIFO), and any pin writes go out through the GPIO block, which also synchronises pin reads. The host can read back status, GPIO and popped FIFO words at any time over the same SPI port, whether or not the core is running.
 
 ```
-host (SPI) --> pe_host_spi --> pe_imem_ff (program)          pe_timebase (T, free-running)
+host (SPI) --> pe_host_spi --> pe_imem (512x16 SRAM)         pe_timebase (T, free-running)
                     |                |                               |
                     |                v                               v
                     +----------> pe_core  <---- h2c/c2h pe_fifo ---- (host data queues)
@@ -28,7 +28,7 @@ The instruction set (`isa/isa.yaml`, the single source of truth) generates the a
 
 Deadlines are wrap-safe: `WAITT Rn` completes in the first cycle in which bit 15 of the 16-bit difference `T - Rn` is 0. A deadline up to 32,768 ticks ahead of `T` stalls and completes exactly in the cycle `T == Rn`; one that has already passed (up to 32,767 ticks behind -- an overrun loop body, or RUN held low across it) completes at once, in its first cycle or in the first cycle after RUN returns; either way the flags are left untouched. Keep deadlines less than 32,768 ticks ahead of `T` and use the prescaler for longer intervals: a deadline 32,769 to 65,535 ticks ahead is indistinguishable from one that has passed and completes at once. The timed waits (`WAITP`, `WAITF`) keep an exact equality compare: they capture `T + timeout` when they start and time out in the cycle `T` equals it, which is what allows the full 65,535-tick timeout (`Rt = R0`).
 
-The instruction memory is 64 x 16 bits (flip-flops in v0): `WRITE_IMEM` addresses and jump/call targets are taken modulo 64, so a program must fit in 64 words (`tools/asm.py` refuses larger ones). It has no reset -- a word the host never wrote holds a random value on silicon -- so load all 64 words (zero-filling the unused ones) before starting the core.
+The instruction memory is 512 x 16 bits, one IHP single-port SRAM macro (`RM_IHPSG13_1P_512x16_c2_bm_bist`): `WRITE_IMEM` addresses and jump/call targets are taken modulo 512, so a program must fit in 512 words (`tools/asm.py` refuses larger ones). It has no reset -- a word the host never wrote holds a random value on silicon -- so load all 512 words (zero-filling the unused ones) before starting the core. The macro has one port, shared between the core's fetch and the host's writes: a `WRITE_IMEM` word that arrives while the core is active (running, including stalled in a wait) is dropped and recorded in `READ_STATUS` bit 5 until the next `WRITE_CTRL` reset; pause the core (RUN low and `WRITE_CTRL` run=0: either one holds it active) or let it `HALT` before loading.
 
 ## Host loader protocol
 
@@ -36,9 +36,9 @@ Mode-0 SPI slave, MSB first, one command byte followed by its payload; CS_n must
 
 | Cmd | Value | Payload (host -> chip) | Response (chip -> host, if any) |
 |---|---|---|---|
-| `WRITE_IMEM` | 0x01 | 10-bit start address (2 bytes, hi then lo, top 6 bits of the first ignored) then instruction words (2 bytes each, hi then lo); address auto-increments per word | -- |
+| `WRITE_IMEM` | 0x01 | 10-bit start address (2 bytes, hi then lo, top 7 bits of the first byte ignored) then instruction words (2 bytes each, hi then lo); address auto-increments per word | -- |
 | `WRITE_CTRL` | 0x02 | 1 byte: bit0 = run, bit1 = reset (restarts PC at 0) | -- |
-| `READ_STATUS` | 0x03 | -- | 4 bytes: status (bit0 halted, bit1 running, bit2 h2c-FIFO valid/non-empty, bit3 c2h-FIFO empty, bit4 h2c-FIFO full), PC[9:8], PC[7:0], flags[2:0] (bit0 = Z, bit1 = C, bit2 = TO) |
+| `READ_STATUS` | 0x03 | -- | 4 bytes: status (bit0 halted, bit1 running, bit2 h2c-FIFO valid/non-empty, bit3 c2h-FIFO empty, bit4 h2c-FIFO full, bit5 imem write dropped), PC[9:8], PC[7:0], flags[2:0] (bit0 = Z, bit1 = C, bit2 = TO) |
 | `PUSH_FIFO` | 0x04 | 2 bytes (hi, lo): word pushed to the host->core FIFO (dropped if full) | -- |
 | `POP_FIFO` | 0x05 | -- | 2 bytes (hi, lo): word popped from the core->host FIFO (0 if empty) |
 | `READ_GPIO` | 0x06 | -- | 5 bytes: `ui_in`, `uio_in`, `{1'b0,uo_out}`, `uio_out`, `uio_oe` (all synchronised snapshots) |
@@ -54,14 +54,10 @@ Caveats worth knowing when driving the port:
 - The timebase `T` free-runs from reset, whatever the core does. While RUN is low (or the core is halted) a wait in progress keeps its deadline but `T` keeps counting. A `WAITT` whose deadline passes meanwhile completes in the first cycle after RUN returns, provided `T` is then at most 32,767 ticks past the deadline (`test/test_host.py::run_low_across_deadline_resumes_immediately`); after a longer pause the deadline can count as ahead again -- only the 16-bit difference `T - Rn` is compared -- and the `WAITT` then waits up to 32,768 ticks for `T` to reach it (32,768 ticks is about 655 us at 50 MHz with prescale 0, about 168 ms with prescale 255). A timed wait (`WAITP`/`WAITF`) whose captured timeout passes meanwhile times out only when `T` comes round to it again, up to 65,536 ticks later, so do not pause a core across a timeout it needs.
 - `WRITE_PRESCALE` takes effect on the next clock. If the new value is below the prescaler's current count, that one tick interval stretches to as many as 256 clocks (the 8-bit counter runs on to 255 and wraps before matching the new value); later ticks are exact.
 
-## v0 limitations
-
-- No lanes (pin engines) and a 64-word flip-flop instruction memory instead of the SRAM macro (`docs/superpowers/specs/2026-09-15-protocol-emulator-design.md`, implementation-status note).
-
 ## How to test
 
 1. Apply the clock and release reset with `ui[7]` (RUN) held low and CS_n high. After reset the core is halted, `uio_oe == 0`, and all outputs are 0 (`test/test_host.py::post_reset_state_and_running_bit` checks this on the pins).
-2. Load a program with `WRITE_IMEM` (all 64 words, see above), then start it with `WRITE_CTRL` (run=1) or by raising `ui[7]`. After a `HALT`, restart with `WRITE_CTRL` run=1, reset=1.
+2. Load a program with `WRITE_IMEM` (all 512 words, see above), then start it with `WRITE_CTRL` (run=1) or by raising `ui[7]`. After a `HALT`, restart with `WRITE_CTRL` run=1, reset=1.
 3. Observe the protocol pins (`ui[3:0]`, `uo[6:0]`, `uio[7:0]`) driven by the loaded program, and optionally poll `READ_STATUS` / `READ_GPIO` or exchange words with `PUSH_FIFO` / `POP_FIFO`.
 
 Worked example -- `firmware/blink.s` (toggles `uo[0]` every 10 cycles forever):

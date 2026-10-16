@@ -30,7 +30,7 @@ module tb_core;
                   .ui_prev(ui_prev), .uio_prev(uio_prev), .wr_en(wr_en), .wr_op(wr_op), .wr_bank(wr_bank), .wr_mask(wr_mask),
                   .pin_en(pin_en), .pin_bank(pin_bank), .pin_idx(pin_idx), .pin_val(pin_val),
                   .uo_out(uo_out), .uio_out(uio_out), .uio_oe(uio_oe));
-  pe_imem_ff u_imem (.clk(clk), .raddr(imem_addr), .rdata(imem_data), .wr_en(1'b0), .waddr(10'd0), .wdata(16'd0));
+  pe_imem #(.IMPL("MACRO")) u_imem (.clk(clk), .active(1'b0), .raddr(imem_addr), .rdata(imem_data), .wr_en(1'b0), .waddr(10'd0), .wdata(16'd0), .wr_dropped());
   pe_fifo u_h2c (.clk(clk), .rst_n(rst_n), .push(h2c_push), .wdata(h2c_wdata), .pop(h2c_pop), .rdata(h2c_rdata), .valid(h2c_valid), .full(h2c_full));
   pe_fifo u_c2h (.clk(clk), .rst_n(rst_n), .push(c2h_push), .wdata(c2h_data), .pop(c2h_pop), .rdata(c2h_rdata), .valid(c2h_valid), .full(c2h_full));
   pe_core u_core (.clk(clk), .rst_n(rst_n), .run(run), .core_reset(core_reset), .imem_addr(imem_addr), .imem_data(imem_data),

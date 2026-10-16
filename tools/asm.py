@@ -9,10 +9,10 @@ Directives: `.equ NAME VALUE` (or `NAME, VALUE`; the value is a numeric literal)
 stored as 16 bits). A label used as a branch operand (BR/BPIN/BFLAG classes) assembles as a
 pc-relative offset; anywhere else (ADDI, .word, JMP/CALL) a label is its absolute address.
 
-Program size: the core's PC is PC_BITS wide, and core v0's instruction memory holds IMEM_WORDS
-(64) words -- addresses and jump targets alias modulo 64 on the chip (docs/info.md), so a
+Program size: the core's PC is PC_BITS wide, and the instruction memory holds IMEM_WORDS
+(512) words -- addresses and jump targets alias modulo 512 on the chip (docs/info.md), so a
 program that does not fit is an error rather than a silently wrapped image. Pass
-`max_words=None` to assemble beyond 64 words (up to the 10-bit PC) for other memory sizes.
+`max_words=None` to assemble beyond 512 words (up to the 10-bit PC) for other memory sizes.
 """
 import argparse, re, sys, os
 if __name__ == "__main__":
@@ -22,7 +22,7 @@ from tools import isa_defs as D
 class AsmError(Exception):
     pass
 
-IMEM_WORDS = 64                                   # core v0 instruction memory (src/pe_imem_ff.v WORDS)
+IMEM_WORDS = 512                                  # instruction memory words (src/pe_imem.v; was 64 in core v0)
 PC_LIMIT = 1 << D.PC_BITS                         # the ISA's 10-bit PC: the hard limit for any memory size
 
 SYMBOLS = {}

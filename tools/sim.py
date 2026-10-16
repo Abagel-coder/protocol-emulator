@@ -23,7 +23,7 @@ def _s(v, bits):
     return v - (1 << bits) if v & (1 << (bits - 1)) else v
 
 class Sim:
-    def __init__(self, words, prescale=1, imem_words=64, t0=0):
+    def __init__(self, words, prescale=1, imem_words=512, t0=0):
         """`prescale` is the tick DIVISOR: T advances once every `prescale` cycles (1 = every
         cycle). The chip's WRITE_PRESCALE register holds the divisor MINUS ONE (pe_timebase.v
         counts 0..prescale, so 0 means every cycle) -- `Sim(prescale=N)` corresponds to

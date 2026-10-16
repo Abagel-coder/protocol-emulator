@@ -84,6 +84,7 @@
     "u_imem.g_macro.u_sram VPWR VGND VDD! VSS!",
     "u_imem.g_macro.u_sram VPWR VGND VDDARRAY! VSS!"
   ],
+  "//": "pdn_cfg.tcl is Loom's (LibreLane default minus the macro grid, plus a pdngen wrapper): the macro is PLACED, not FIXED, while pdngen builds shapes so the stripes above run full height through its supply columns, and GeneratePDN fails if a stripe over the macro misses a same-net column or a macro supply pin gets no stripe.",
   "PDN_CFG": "dir::pdn_cfg.tcl",
   "MAGIC_MACRO_STD_CELL_SOURCE": "PDK",
   "MAGIC_EXT_ABSTRACT_CELLS": ["RM_IHPSG13_.*"],

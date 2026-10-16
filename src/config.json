@@ -62,6 +62,8 @@
   "FP_PDN_VWIDTH": 2.1,
   "//": "SRAM instruction memory: one IHP 512x16 single-port macro from the PDK (docs/superpowers/specs/2026-10-15-sram-imem-design.md).",
   "//": "Stripe grid chosen so the tile's Metal4 VPWR/VGND stripes land on the macro's Metal4 supply columns for a macro at x = 12.",
+  "//": "FP_PDN_VOFFSET is measured from the core origin x = 2.88 (template margins) to the stripe centre: VPWR centres at 29.24 + 67.44k, VGND at 34.86 + 67.44k.",
+  "//": "The alignment window is only 0.04 um wide because the macro's column pitch breaks from 67.44 to 68.11 across the centre VDD! bank, so the macro x, the margins and the pitch may not move independently.",
   "FP_PDN_VSPACING": 3.52,
   "FP_PDN_VOFFSET": 26.36,
   "MACROS": {

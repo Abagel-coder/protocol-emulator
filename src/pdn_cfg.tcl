@@ -19,7 +19,7 @@
 # ---------------------------------------------------------------------------
 # protocol-emulator (tt_um_abagel_coder_protocol_emulator): this file is Loom's
 # src/pdn_cfg.tcl, unmodified below this block.
-#   Source:  https://github.com/thomasgilbert481/tt_um_loom/blob/main/src/pdn_cfg.tcl
+#   Source:  https://github.com/thomasgilbert481/tt_um_loom/blob/87524912e804de2f6b1a0f40cc852b2f05e90b76/src/pdn_cfg.tcl
 #            (Apache-2.0), commit 87524912e804de2f6b1a0f40cc852b2f05e90b76,
 #            fetched 2026-10-15.
 #   Why:     our previous file (LibreLane's default minus the macro grid) let

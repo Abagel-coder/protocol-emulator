@@ -1,10 +1,10 @@
 # Handoff — protocol-emulator ASIC (Jane Street / Tiny Tapeout CMOS5L)
 
-Written 2026-09-18, updated 2026-09-22 after the whole-branch review and its fix wave. **Nothing is merged: all implementation work is on branch `core-v0`; `main` is untouched since the plan commit (`3546bcf`). Do not merge without the owner's say-so.**
+Written 2026-09-18, updated 2026-10-16 after the SRAM instruction-memory branch's two GitHub hardening runs. **`main` holds core v0 and core v0.1 (merged 2026-10-15, `ac0e555`). The SRAM instruction memory is on branch `sram-imem`: the code is complete and reviewed, the flow completes in CI, and the branch is NOT merged. Four owner decisions (artifact quota, timing, release label, merge) are open; do not merge without the owner's say-so.**
 
 ## Paste this into the new session
 
-> Continue the protocol-emulator ASIC project in this folder. Read `HANDOFF.md` first, then `PLAN.md`. Branch `core-v0` is reviewed and ready to merge; check "What is left" for the owner decisions and the CI result of the last push. Then start the next plan (lanes) with the writing-plans skill. Run one subagent at a time, tell it to do the work itself in the foreground, and free memory on this Mac first (see "Environment").
+> Continue the protocol-emulator ASIC project in this folder. Read `HANDOFF.md` first, then `PLAN.md`. Branch `sram-imem` (512 x 16 SRAM instruction memory) is reviewed and its flow completes in CI, but two things block the green run: the GitHub artifact quota and negative slow-corner setup slack. Check "What is left" for the four open owner decisions, ask which have been answered, then apply the answers (Task 4's README results row needs a green `gds` run). After that start plan C (required protocols) with the writing-plans skill. Run at most two agents, only one of them committing, tell each to do the work itself in the foreground, and free memory on this Mac first (see "Environment").
 
 ## Where everything is
 
@@ -12,24 +12,31 @@ Written 2026-09-18, updated 2026-09-22 after the whole-branch review and its fix
 |---|---|
 | Competition plan, timeline, decision log, risks | `PLAN.md` |
 | Approved architecture (v1) | `docs/superpowers/specs/2026-09-15-protocol-emulator-design.md` |
-| Implementation plan being executed (10 tasks) | `docs/superpowers/plans/2026-09-16-core-v0.md` |
+| Implementation plans executed | `docs/superpowers/plans/2026-09-16-core-v0.md` (core v0, 10 tasks), `docs/superpowers/plans/2026-10-15-sram-imem.md` (SRAM, 4 tasks; Task 4 = docs and results row, open) |
+| SRAM instruction-memory design | `docs/superpowers/specs/2026-10-15-sram-imem-design.md` |
 | Research: brief, prior art, verification, novelty decisions N1–N10 | `docs/research/` |
 | ISA source of truth and generated reference | `isa/isa.yaml`, `docs/isa.md` |
 | Tools: generator, assembler, cycle-accurate oracle, host encoders | `tools/gen_isa.py`, `tools/asm.py`, `tools/sim.py`, `tools/host.py` |
-| RTL | `src/project.v` (top), `src/pe_core.v`, `pe_gpio.v`, `pe_timebase.v`, `pe_imem.v`, `pe_fifo.v`, `pe_host_spi.v` (exactly `info.yaml`'s `source_files`); `src/RM_IHPSG13_1P_512x16_c2_bm_bist.v` is the SRAM macro's port-only blackbox for synthesis (not a source file: the flow places the macro) and `src/pdn_cfg.tcl` the flow's power-grid script; the macro's simulation models are vendored in `test/models/`; the warm-up UART kept as a timing reference is test-only and lives in `test/uart_tx_ref.v` |
+| RTL | `src/project.v` (top), `src/pe_core.v`, `pe_gpio.v`, `pe_timebase.v`, `pe_fifo.v`, `pe_host_spi.v` and `src/pe_imem.v` (exactly `info.yaml`'s `source_files`). `pe_imem.v` has two builds selected by `IMPL`: `MACRO` (the chip: one IHP `RM_IHPSG13_1P_512x16_c2_bm_bist` single-port SRAM) and `FLOPS` (a 512 x 16 flip-flop array for simulation and FPGA only, not a chip fallback at 512 words) |
+| SRAM macro blackbox | `src/RM_IHPSG13_1P_512x16_c2_bm_bist.v`: port-only view for synthesis. Not a source file: the flow places the macro, and `src/config.json` names its instance and position |
+| Power grid | `src/pdn_cfg.tcl`: Loom's pdngen wrapper (Apache-2.0, attributed in its header, commit-pinned) that runs the aligned Metal4 stripes through the macro's supply columns and checks it; `src/config.json` holds the stripe-grid parameters, the macro's instance name (`u_imem.g_macro.u_sram`), its placement and `CLOCK_PERIOD` (20 ns today) |
+| SRAM simulation models | `test/models/` (the IHP behavioural macro, vendored, unmodified, `-DFUNCTIONAL`; why they are needed is in `test/models/README.md`) |
+| Metrics gate | `test/check_metrics.py` (run by the `gds` workflow on `runs/wokwi/final/metrics.json`: setup slack in the slow and typical corners, hold slack, route DRC, antenna, LVS) and its tests `tests/test_check_metrics.py`; the saved core v0.1 `metrics.json` is `tests/data/metrics_core_v01.json` |
+| Simulation backdoor for the instruction memory | `test/imem_load.py`: deposits a program straight into the behavioural macro's array (RTL simulations without a host; unwritten words set to 0 so the core never fetches X). Over SPI, `tools/host.py` `encode_write_imem` builds the `WRITE_IMEM` stream |
+| Test-only UART timing reference | `test/uart_tx_ref.v` |
 | Firmware | `firmware/blink.s`, `firmware/uart_tx.s` |
 | Tests | `tests/` (pytest), `test/` (cocotb: `Makefile` = host/top level, `Makefile.core`, `Makefile.blocks`, `Makefile.uartfw`) |
 | Formal proofs and their honest scope | `formal/core.sby`, `formal/core_props.v`, `formal/timebase_props.v`, `formal/README.md` |
 | Toolchain bootstrap | `scripts/setup_env.sh` (writes `env.sh`, git-ignored) |
-| Per-task briefs, reports, review diffs, progress ledger (**local only, git-ignored**) | `.superpowers/sdd/` |
-| GitHub | https://github.com/Abagel-coder/protocol-emulator (public, Pages enabled) |
+| Per-task briefs, reports, review diffs, progress ledger (**local only, git-ignored**) | `.superpowers/sdd/` (SRAM: `sram-task-N-brief.md`, `sram-task-N-report.md`, `sram-final-review.md`, `sram-final-rereview.md`); CI logs are saved there when downloaded (`gds-ac0e555.log`, `gds-10a9583.log`; the log of `714d81a` was not saved) |
+| GitHub | https://github.com/Abagel-coder/protocol-emulator (**private**; Pages enabled) |
 
 ## State
 
-- Branch `core-v0` at the commit that carries this handoff update (`git log -1`), 33 commits ahead of `main`, working tree clean, pushed. `main` is untouched since the plan commit `3546bcf`.
-- All ten plan tasks are implemented and reviewed. The whole-branch review (three lenses, 2026-09-21, `.superpowers/sdd/final-review-{rtl,verif,tools}.md`) found no Critical issue and no functional RTL bug; its fix wave (six commits `a84a0ee`..`8d0094a`, `.superpowers/sdd/final-fix-report.md`) was re-reviewed 2026-09-22 (`.superpowers/sdd/final-rereview.md`): **ready to merge**. RTL logic is unchanged since the hardened commit `f743131` (only comments and `ifdef FORMAL` properties changed; yosys cell count identical), so the core v0 baseline table below describes the RTL of `core-v0`. It does not describe core v0.1 (branch `core-v0.1`: wrap-safe `WAITT`, the timeout adder off the advance path), whose own hardening result follows it.
-- GitHub Actions: last verified green on `721cc2a` (all four workflows). The push of that commit on 2026-09-22 is the first CI run of the new `test` steps (core/fuzzer, blocks, UART suites), of the pinned `tools` formal job, and of the gate-level run of the new host tests — check https://github.com/Abagel-coder/protocol-emulator/actions before merging; if `gl_test` fails on a new host test, the cause is an X-read at gate level (see `test/test_host.py` comments), not the RTL.
-- Local suites (2026-10-01, branch `core-v0.1`; on `core-v0` 2026-09-22 they were pytest 39, host 18, core 14 directed and 5 cover goals): pytest 44; cocotb host 19, core 19 directed + the 200-program differential fuzzer, blocks 3, UART equivalence 1, all warning-free; Verilator lint clean; `formal/core.sby` five tasks pass (`bmc`, `prove`, `cover`, `timebase_bmc`, `timebase_prove`) with properties T1 (the wrap-safe deadline rule) and its lemmas T1c-T1f, T1b (port-bit form), T2a, T2b (successor-address form), P1 reset state, P3 wait persistence, P4 deadline capture, T3/T3b/T3c, T4 parts 1-2, T4c (the simplified timeout compare), T5a-d, RUN_LINK, and 6 cover goals (`formal/README.md`).
+- Branch `sram-imem`: the commit that carries this handoff update (`git log -1`) sits on `41ac372` (RTL, tools, tests and flow files are unchanged by it; it edits documents and one comment in `src/pdn_cfg.tcl`). `origin/sram-imem` was last pushed at `10a9583`; check `git status -sb` for what is still local. `main` is at `ac0e555` (core v0.1, merged 2026-10-15 by fast-forward; CI on it green on all four workflows).
+- The SRAM work: design `docs/superpowers/specs/2026-10-15-sram-imem-design.md`, plan `docs/superpowers/plans/2026-10-15-sram-imem.md`. Tasks 1-3 (the `pe_imem` block, the chip integration with 512-word tools and tests and `READ_STATUS` bit 5, the flow configuration and metrics gate) are implemented, each reviewed with mutation checks; the whole-branch review and its fix wave are approved (reports `.superpowers/sdd/sram-*.md`, local only). Task 4 (this handoff, the README results row once a green run exists) is the open one.
+- Local suites at `41ac372` (2026-10-16): host 22, core 20 (19 directed + the 200-program differential fuzzer, each program tiled 8 times over the 512 words), blocks 7, UART firmware equivalence 1, pytest 50, Verilator lint clean, `formal/core.sby` five tasks pass (sby 5/5), `tools/gen_isa.py --check` clean.
+- GitHub Actions on `sram-imem`: the `test` and `docs` workflows failed on `714d81a` only at the artifact upload ("Artifact storage quota has been hit"; every test step was green); the `gds` workflow is the subject of the section below. After the quota failure the controller deleted 42 artifacts (GDS_logs, gds_render, tt_submission; 1.68 GB) from 14 intermediate runs and later the bundle of the main-merge run 36945175253; the bundles of the runs of record 35402020440 (core v0) and 37027426422 (core v0.1) were kept.
 
 ### Core v0 hardening result (GitHub `gds` run 35402020440, commit `f743131`)
 
@@ -61,16 +68,38 @@ Source: the job log (`.superpowers/sdd/gds-ac0e555.log`, git-ignored) and the ru
 
 Core v0.1 is 196 cells smaller than core v0 and its worst setup slack is 2.27 ns higher (4.848 against 2.58 ns). The slack numbers come from `metrics.json`; the run summary is not needed.
 
-## What is left on this branch (in order)
+### Core v1 hardening (SRAM) status: GitHub `gds` runs on `sram-imem`
 
-1. **Check CI on the pushed head** (link above). Fix only if something is red. (`core-v0.1`, commit `ac0e555`: all jobs of `gds` run 37027426422 were green; its hardening baseline is recorded above.)
-2. **Owner decisions** (open unless marked decided; the code documents the current choice):
-   - Merge `core-v0` into `main` directly, or open a pull request. Not before asked.
-   - **Decided 2026-10-01 (owner):** deadline compare made wrap-safe per spec §6 -- a late `WAITT` just continues, flags untouched (a miss flag was declined) -- together with moving the `t_in + tmo` adder off the `adv` path, on branch `core-v0.1` (`docs/superpowers/specs/2026-10-01-wrap-safe-deadline-design.md`).
-   - **Decided 2026-10-01 (owner):** the test-only UART reference moved out of `src/` to `test/uart_tx_ref.v` (module `uart_tx_ref`) on branch `core-v0.1`; `src/` now holds only chip files: the seven `info.yaml` `source_files`, `isa_defs.vh` and the flow's `config.json`.
-3. Then the next plan: lanes (below).
+Core v0.1 had 12,561 standard cells and no macro. Two runs so far (both stopped by the artifact quota, not by the flow):
+
+| | Harden 1: run 38838496042, commit `714d81a` | Harden 2: run [38841114120](https://github.com/Abagel-coder/protocol-emulator/actions/runs/38841114120), commit `10a9583`, 59 min |
+|---|---|---|
+| Flow | macro placed, `CheckMacroInstances` passed, routed in 21 min, then stopped at `OpenROAD.IRDropReport` | complete, to `ReportManufacturability` |
+| Cells | 4,262 including the macro | 1 macro + 5,535 standard cells: 568 sequential, 3,450 combinational, 1,174 timing-repair buffers, 73 clock buffers, 27 clock inverters, 242 inverters, 1 buffer |
+| PDN | PSM-0069 on VPWR and VGND: the macro's `VDD!`/`VSS!` unconnected (stripes cut around the macro) | Loom's pdngen wrapper checks pass; PSM-0040 all shapes connected on VPWR and VGND |
+| LVS | not reached | pass |
+| Antenna | not reached | pass (4 diodes) |
+| Setup | not reached | `Checker.SetupViolations`: violations in `nom_slow_1p08V_125C`; the post-PnR table lists 91 violating endpoints; the slack value is in the run's step summary, not the job log |
+| Hold | not reached | clean |
+| Max slew / max cap | not reached | max-slew violations in the slow corner / max-cap clean |
+| Magic DRC | not reached | 57,923 errors (non-fatal by configuration while the macro is present; the precheck's KLayout DRC is the real DRC gate and did not run) |
+| Job result | failed at IRDropReport | failed only at the artifact upload (quota), so the metrics gate, precheck, `gl_test` and the viewer were skipped |
+
+The fix between the runs was `10a9583` (adopt Loom's pdngen wrapper in `src/pdn_cfg.tcl`; Apache-2.0, attributed): the first file was LibreLane's default minus the macro grid, which left the Metal4 stripes short of the macro. The standard-cell count is 5,535 plus the macro, against 12,561 cells for core v0.1 (the 64-word flip-flop memory is gone and the macro holds eight times the words). The timing cause is the macro's clock-to-output of about 6.3 ns inside the fetch loop (`A_DOUT` -> decode -> `next_pc` -> `A_ADDR`) at the 20 ns clock. None of these numbers are in `README.md`'s Results table: there is no complete run to quote. Logs: `.superpowers/sdd/gds-10a9583.log` is saved; `gds-714d81a.log` is not.
+
+## What is left (in order)
+
+1. **Owner decisions** (all open; the code documents the current choice):
+   1. **Artifact quota.** The repository is private and the free quota is 500 MB; each `gds` run adds about 130 MB, and GitHub's accounting lagged the deletions by hours (294 MB stored still hit the quota). Make the repository public (the competition requires open source, and public repositories have no artifact quota) or set an Actions spending limit above zero. Until then every run that reaches an upload fails and the metrics gate, precheck, `gl_test` and viewer are skipped.
+   2. **Timing.** Slow-corner setup slack is negative with the macro's clock-to-output in the fetch loop. Options: relax `CLOCK_PERIOD` to 25 ns (40 MHz), after which `info.yaml` `clock_hz`, the UART firmware's bit constant (434 cycles per bit, `firmware/uart_tx.s`) and the docs change; or change the core (the review's note: a separate gate job instead of the gate inside `gds`, so a slack failure does not hide the precheck and gate-level results, is also the owner's call). The metrics gate fails until this is resolved.
+   3. **Release label.** `src/project.v` calls the SRAM build "core v1", which collides with "spec v1"; the owner names the release.
+   4. **Merge of `sram-imem`** into `main`, after 1 and 2 and a green run.
+2. **Task 4 of the SRAM plan:** once one `gds` run is green end to end (metrics gate, precheck, `gl_test`), add the README results row from that run's `metrics.json` (save it unchanged under `tests/data/`, as was done for core v0.1), and delete the superseded run bundles to stay under the quota.
+3. **Plan C** (required protocols: UART RX, SPI master modes 0-3, I2C master with reference models; schedule in `PLAN.md` section 3, freeze Nov 8).
 
 ### Minor findings logged during task reviews (triaged in the whole-branch review)
+
+(`pe_imem_ff` was replaced by `pe_imem` on `sram-imem`, so the `pe_imem_ff` `WORDS`/`AW` items below no longer apply there; the instruction-memory array is still uninitialised on silicon.)
 
 Status after the fix wave (2026-09-22): fixed -- unused `importlib`; assembler dead code / `max_pc` / `.equ`-`.org`-`.word` error wrapping; `reserved_alu_fn_is_noop` (now rs != rd, checks C); stale HALT comment; post-reset assertion and `running` bit; `sim.py` prescale docstring; `w_rt` decode pinned formally; `IN`/PUSH/POP/CALL/RET/IRQ/WAITL/zero-timeout semantics documented. Deferred to the next plan (owner decisions): `pull_request` trigger (all workflows are push-only by convention); `pe_gpio` OE-clear / pin 7 / `tick` block tests; `alu_valid` comment; `pe_imem_ff` `WORDS = 1 << AW`; `h2c_full` gate; `imem_waddr` increment placement; CS_n hold wording; `cs_start` wire; fuzzer `pc` compare; `uart_tx.s` idle-segment check. (The `t_in + tmo` adder on the critical path was taken off it on `core-v0.1`.)
 
@@ -94,7 +123,7 @@ Status after the fix wave (2026-09-22): fixed -- unused `importlib`; assembler d
 - Host SPI: mode 0, MSB first, SCK ≤ clk/16, commands 0x01–0x07 (table in `docs/info.md`); status bit4 = host→core FIFO full.
 - `Sim.step()` returns `(cycle, uo, uio_out, uio_oe, halted)`.
 - Generated files (`docs/isa.md`, `tools/isa_defs.py`, `src/isa_defs.vh`) change only via `isa/isa.yaml` + `.venv/bin/python tools/gen_isa.py`; CI fails on drift of those three. The field slices in `src/pe_core.v` are hand-typed and are checked only by the differential fuzzer.
-- The instruction memory is 512 words, one IHP SRAM macro (addresses and jump targets alias modulo 512; the assembler refuses larger programs; zero-fill before RUN). Its single port is shared with the core's fetch: a `WRITE_IMEM` word that arrives while the core is active is dropped and sets `READ_STATUS` bit 5 until the next `WRITE_CTRL` reset, so pause or halt the core before loading. `WAITT` is wrap-safe (core v0.1): it completes once bit 15 of `T - Rn` is 0 -- a deadline up to 32,768 ticks ahead releases exactly at `T == Rn`, one already passed (up to 32,767 behind) at once, flags untouched; keep deadlines under 32,768 ticks ahead. Timed waits keep the equality compare on the `T + timeout` they capture when they start, so a timeout that passes while RUN is low waits for `T` to come round again (`docs/info.md`).
+- The instruction memory is 512 words, one IHP SRAM macro on the chip (the `FLOPS` build is simulation/FPGA only). Addresses and jump targets alias modulo 512 (`WRITE_IMEM` takes the low 9 bits of its 10-bit address field); the assembler refuses programs larger than 512 words; the macro has no reset, so load all 512 words (zero-fill) before RUN. Its single port is shared with the core's fetch: a `WRITE_IMEM` word that arrives while the core is active (running, including stalled in a wait) is **dropped**, not queued, and sets `READ_STATUS` bit 5 until the next `WRITE_CTRL` reset; pause (RUN low and `WRITE_CTRL` run=0) or halt the core before loading. Caveat, the RUN-pin race: a word accepted in the last inactive cycle (RUN rising during a load) leaves a stale word in `ir` for one cycle, and the word under a stalled `pc` can change; keep RUN low while loading (`formal/README.md` hypothesis H3 is narrowed to exactly this). `WAITT` is wrap-safe (core v0.1): it completes once bit 15 of `T - Rn` is 0 -- a deadline up to 32,768 ticks ahead releases exactly at `T == Rn`, one already passed (up to 32,767 behind) at once, flags untouched; keep deadlines under 32,768 ticks ahead. Timed waits keep the equality compare on the `T + timeout` they capture when they start, so a timeout that passes while RUN is low waits for `T` to come round again (`docs/info.md`).
 
 ## Environment on this Mac
 
@@ -120,18 +149,21 @@ cd formal && sby -f core.sby       # all five tasks
 - Several agents died when they handed work to a background worker or ended their turn "waiting for a monitor". Tell every agent: do all the work yourself, run long commands in the foreground with a time limit, never wait on notifications.
 - Interrupted agents leave uncommitted partial work. On resume, check `git status` and the ledger before re-dispatching, and tell the next agent to treat the working tree as unverified.
 - Reviews with mutation testing found real gaps every time (inert tests, surviving mutants in the formal properties). Keep asking reviewers to prove a test or property fails when the fix is reverted.
-- Big agents stall when the machine swaps; make every agent write its report file incrementally and commit per group, so a stalled agent can be resumed (SendMessage to its id) or its work finished by hand. Run one agent at a time on this Mac.
+- Big agents stall when the machine swaps; make every agent write its report file incrementally and commit per group, so a stalled agent can be resumed (SendMessage to its id) or its work finished by hand. Run at most two agents at a time on this Mac (the SRAM work used two when swap was 3.7 GB; earlier sessions stalled when the machine swapped), and only one of them commits: a second agent writes files only and the controller commits, because two agents committing in one working tree swept a staged `git rm` into the wrong commit on 2026-10-15.
+- **GitHub artifact quota (private repository, 500 MB free).** Every `gds` run uploads `GDS_logs`, `gds_render` and `tt_submission` (about 130 MB per run); the `test` and `docs` jobs fail at their own upload once the quota is hit even though every test step passed, and a failed gds upload skips the metrics gate, precheck, `gl_test` and viewer. GitHub's usage figure lags deletions by hours. Delete superseded bundles as you go (`gh api repos/Abagel-coder/protocol-emulator/actions/artifacts` lists them, `gh api -X DELETE repos/Abagel-coder/protocol-emulator/actions/artifacts/<id>` removes one) and KEEP the artifacts of the runs of record: 35402020440 (core v0) and 37027426422 (core v0.1). The run of the main merge (36945175253) was identical RTL to core v0 and its bundle is already deleted. Making the repository public removes the quota (owner decision 1).
+- A push cancels the `gds` run in progress on the same branch (`cancel-in-progress`); do not push while a run you want is still going. A docs-only commit can carry `[skip ci]`.
 
-## After this branch: next plans (not written yet)
+## After the SRAM branch: next plans (not written yet)
 
 1. **Lanes (pin engines)**: shift + fractional divider, NRZ → CRC-32 → NRZI/bit-stuffing (USB) → edge-timestamp FIFO → Manchester; start-at-deadline (`LARM`); contention monitors in the GPIO block. Decisions N2–N6 in `docs/research/novelty-synthesis.md`.
-2. **SRAM instruction memory** on CMOS5L: the foundry macro fails at power-grid generation because the tile's vertical stripes and the macro's power pins are both on Metal4; the PRISM entry's stripe-alignment plugin is the known fix (notes in `docs/research/competition-brief.md`).
-3. **Protocol firmware + reference models**: UART RX, SPI master/slave, I2C master/slave, then USB low speed and 10BASE-T.
-4. **Verification depth**: MCY mutation score, EQY RTL-vs-netlist equivalence, cocotb-coverage crosses, microcotb replay on the FPGA board, measured AI-assisted property drafting.
-5. **Generate field-slice macros** into `src/isa_defs.vh` (e.g. `ISA_BPIN_LEVEL_MSB/LSB`) and use them in `pe_core.v`, so `gen_isa.py --check` really pins the layout (today only the fuzzer does); also generate the class-count sentence in `docs/info.md`.
-6. **Owner decisions carried over from the whole-branch review**: merge `core-v0` vs. pull request. (Decided 2026-10-01, branch `core-v0.1`: the wrap-safe `WAITT` deadline compare per spec §6, with the `t_in + tmo` adder moved off the `adv` critical path; the UART timing reference moved from `src/` to `test/uart_tx_ref.v`.)
+2. **Protocol firmware + reference models (plan C, required by the Nov 8 freeze: do this first)**: UART RX, SPI master/slave, I2C master/slave, then USB low speed and 10BASE-T.
+3. **Verification depth**: MCY mutation score, EQY RTL-vs-netlist equivalence, cocotb-coverage crosses, microcotb replay on the FPGA board, measured AI-assisted property drafting.
+4. **Generate field-slice macros** into `src/isa_defs.vh` (e.g. `ISA_BPIN_LEVEL_MSB/LSB`) and use them in `pe_core.v`, so `gen_isa.py --check` really pins the layout (today only the fuzzer does); also generate the class-count sentence in `docs/info.md`.
+5. **Owner decisions carried over:** the four open SRAM decisions under "What is left". (Decided 2026-10-01, branch `core-v0.1`: the wrap-safe `WAITT` deadline compare per spec §6, with the `t_in + tmo` adder moved off the `adv` critical path; the UART timing reference moved from `src/` to `test/uart_tx_ref.v`. Decided 2026-10-15: `core-v0` and `core-v0.1` merged into `main`.)
+
+The README-as-evidence-ledger plan (plan A) and plan C are scheduled in `PLAN.md` section 3.
 
 ## Owner-side items
 
 - Sign-up form: done. FPGA kit: ordered, owner will say when it arrives. Team (D2): deferred.
-- Schedule: `PLAN.md` compressed timeline; required-protocol freeze targeted for 2026-11-02; submission deadline 2027-01-18 (aim for 2027-01-15).
+- Schedule: `PLAN.md` compressed timeline; required-protocol freeze re-planned to 2026-11-08 (hard stop 2026-11-23); submission deadline 2027-01-18 (aim for 2027-01-15).

@@ -36,7 +36,7 @@ Mode-0 SPI slave, MSB first, one command byte followed by its payload; CS_n must
 
 | Cmd | Value | Payload (host -> chip) | Response (chip -> host, if any) |
 |---|---|---|---|
-| `WRITE_IMEM` | 0x01 | 10-bit start address (2 bytes, hi then lo, top 7 bits of the first byte ignored) then instruction words (2 bytes each, hi then lo); address auto-increments per word | -- |
+| `WRITE_IMEM` | 0x01 | start address (2 bytes, hi then lo; the memory uses the low 9 bits, so addresses alias modulo 512) then instruction words (2 bytes each, hi then lo); address auto-increments per word | -- |
 | `WRITE_CTRL` | 0x02 | 1 byte: bit0 = run, bit1 = reset (restarts PC at 0) | -- |
 | `READ_STATUS` | 0x03 | -- | 4 bytes: status (bit0 halted, bit1 running, bit2 h2c-FIFO valid/non-empty, bit3 c2h-FIFO empty, bit4 h2c-FIFO full, bit5 imem write dropped), PC[9:8], PC[7:0], flags[2:0] (bit0 = Z, bit1 = C, bit2 = TO) |
 | `PUSH_FIFO` | 0x04 | 2 bytes (hi, lo): word pushed to the host->core FIFO (dropped if full) | -- |

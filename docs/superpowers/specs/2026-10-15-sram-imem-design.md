@@ -1,6 +1,6 @@
 # SRAM instruction memory: design (2026-10-15)
 
-Status: owner decision of 2026-10-01 ("plan B": one 512x16 single-port macro, `WRITE_IMEM` ignored and reported while the core runs, flip-flop build kept as fallback), written up here as the design the plan `docs/superpowers/plans/2026-10-15-sram-imem.md` implements. Research behind every flow choice: `.superpowers/research/sram-recipe-2026-10-02.md` (local, git-ignored) and `docs/research/competition-brief.md`.
+Status: owner decision of 2026-10-01 ("plan B": one 512x16 single-port macro, `WRITE_IMEM` ignored and reported while the core runs, flip-flop build kept as fallback (for simulation and FPGA; see §4)), written up here as the design the plan `docs/superpowers/plans/2026-10-15-sram-imem.md` implements. Research behind every flow choice: `.superpowers/research/sram-recipe-2026-10-02.md` (local, git-ignored) and `docs/research/competition-brief.md`.
 
 ## 1. Why
 

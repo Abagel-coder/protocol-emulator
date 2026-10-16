@@ -1,7 +1,10 @@
 `default_nettype none
 // Instruction memory, 512 x 16, synchronous read (one-cycle latency), host write port.
 // IMPL = "MACRO": one IHP RM_IHPSG13_1P_512x16_c2_bm_bist single-port SRAM (the chip).
-// IMPL = "FLOPS": a flip-flop array with the same cycle behaviour (fallback: a flow failure, FPGA).
+// IMPL = "FLOPS": a flip-flop array with the same cycle behaviour, for simulation and the FPGA build;
+// it keeps the two implementations checkable against each other. It is NOT a chip fallback at 512
+// words (8,192 flip-flops, about 400,000 um2 of flops against a 902,417 um2 core); a chip fallback
+// would need a smaller depth (a WORDS parameter or the 64-word memory of core v0.1).
 // The single port is shared. A host write is accepted only while the core is not active; a write
 // that arrives while the core is active is dropped and reported for that cycle on wr_dropped
 // (pe_host_spi keeps it as READ_STATUS bit 5). During an accepted write the read output holds its

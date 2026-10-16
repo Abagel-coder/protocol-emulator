@@ -6,6 +6,7 @@ Unmodified copies of two files from the IHP-Open-PDK (Apache-2.0), commit
 - `RM_IHPSG13_1P_512x16_c2_bm_bist.v` -- the macro wrapper (instantiates the behavioural core under `FUNCTIONAL`; checks `A_DLY == 1`)
 - `RM_IHPSG13_1P_core_behavioral_bm_bist.v` -- the behavioural single-port SRAM
 
-They are here because the GitHub `test` and `gl_test` jobs have no PDK checkout, and because the
-gate-level netlist keeps the macro as a black box. Every `test/Makefile*` adds both with `-DFUNCTIONAL`.
+They are here because the GitHub `test` job has no PDK checkout, and because the gate-level netlist
+keeps the macro as a black box: `gl_test` does have a PDK checkout (`GATES=yes` reads `$(PDK_ROOT)` for
+the standard-cell models), but the netlist does not contain the macro, so both jobs need these models. Every `test/Makefile*` adds both with `-DFUNCTIONAL`.
 The synthesis view is the port-only `src/RM_IHPSG13_1P_512x16_c2_bm_bist.v`.

@@ -88,7 +88,7 @@ async def imem_write_while_active_is_dropped_and_reported(dut):
     assert int(dut.im_drop_m.value) == 0 and int(dut.im_drop_f.value) == 0
     dut.im_active.value = 0
     assert await imem_read(dut, 7) == (0x1111, 0x1111), "a write while active must be dropped"
-    dut.im_wr_en.value = 1; dut.im_waddr.value = 7; dut.im_wdata.value = 0x2222   # accepted write: sample before its edge
+    dut.im_wr_en.value = 1; dut.im_waddr.value = 7; dut.im_wdata.value = 0x2222   # accepted write: sample while it is presented (the drop flag is combinational)
     await FallingEdge(dut.clk)
     assert int(dut.im_drop_m.value) == 0 and int(dut.im_drop_f.value) == 0, "an accepted write must not be flagged as dropped"
     await RisingEdge(dut.clk); dut.im_wr_en.value = 0
@@ -120,18 +120,31 @@ async def imem_read_output_holds_during_a_write(dut):
 
 @cocotb.test()
 async def imem_macro_and_flops_agree_under_random_traffic(dut):
-    """2,000 random cycles of reads, writes and active toggles: both implementations must give
-    the same rdata every cycle, and wr_dropped must equal (active and wr_en) of that cycle."""
+    """2,000 random cycles of reads, writes and active toggles: both implementations must equal a
+    Python reference model of the memory every cycle (a write lands only when wr_en and not active
+    and the output then HOLDS its previous value; every other cycle the output is mem[raddr % 512]),
+    and wr_dropped must equal (active and wr_en) of that cycle. The model, not MACRO-vs-FLOPS
+    agreement, is what catches a fault in the logic both branches share (a dropped write steering
+    the read address, or suppressing the read)."""
     await start(dut); await imem_idle(dut)
     rng = random.Random(7)
-    await imem_fill(dut, [rng.randrange(65536) for _ in range(512)])
-    for _ in range(2000):
+    mem = [rng.randrange(65536) for _ in range(512)]
+    await imem_fill(dut, mem)
+    expect = mem[0]
+    assert await imem_read(dut, 0) == (expect, expect)    # a defined output register before the first model step
+    for cycle in range(2000):
         active = int(rng.random() < 0.5); wr_en = int(rng.random() < 0.3)
+        waddr = rng.randrange(1024); wdata = rng.randrange(65536); raddr = rng.randrange(1024)
         dut.im_active.value = active; dut.im_wr_en.value = wr_en
-        dut.im_waddr.value = rng.randrange(1024); dut.im_wdata.value = rng.randrange(65536)
-        dut.im_raddr.value = rng.randrange(1024)
+        dut.im_waddr.value = waddr; dut.im_wdata.value = wdata; dut.im_raddr.value = raddr
+        if wr_en and not active:
+            mem[waddr % 512] = wdata                       # output holds
+        else:
+            expect = mem[raddr % 512]
         await RisingEdge(dut.clk); await FallingEdge(dut.clk)
-        assert int(dut.im_rdata_m.value) == int(dut.im_rdata_f.value)
+        got_m, got_f = int(dut.im_rdata_m.value), int(dut.im_rdata_f.value)
+        assert got_m == expect, f"MACRO rdata {got_m:#06x} != reference {expect:#06x} at cycle {cycle} (raddr {raddr}, waddr {waddr}, wr_en {wr_en}, active {active})"
+        assert got_f == expect, f"FLOPS rdata {got_f:#06x} != reference {expect:#06x} at cycle {cycle} (raddr {raddr}, waddr {waddr}, wr_en {wr_en}, active {active})"
         assert int(dut.im_drop_m.value) == int(active and wr_en), "wr_dropped must be active and wr_en"
         assert int(dut.im_drop_f.value) == int(active and wr_en), "wr_dropped must be active and wr_en"
     await imem_idle(dut)

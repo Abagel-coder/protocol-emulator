@@ -631,3 +631,39 @@ async def write_imem_while_running_is_dropped_and_flagged(dut):
     st, _, _ = await status(spi)
     assert st & 0x01 == 0x01, ("the HALT written while paused did not land", st)
     assert st & 0x20 == 0, ("bit 5 not cleared by WRITE_CTRL's reset bit", st)
+
+@cocotb.test()
+async def dropped_write_does_not_disturb_the_fetch(dut):
+    """The reason the SRAM's one port is shared the way it is: a WRITE_IMEM word dropped because
+    the core is active must leave the core's instruction fetch exactly as it was. Run firmware/
+    blink.s (uo[0] toggles every 10 cycles), then send four HALT words over addresses 0..3 -- the
+    loop's own words -- while it runs, sampling uo[0] at every falling edge across the whole write
+    and for 60 cycles after. A dropped write that steered the read address or suppressed the read
+    would corrupt one fetch (the TGL, the JMP or its slot) and shift or swallow a toggle, which
+    write_imem_while_running_is_dropped_and_flagged's JMP 0 loop cannot see. Every toggle interval
+    must be exactly 10, the toggles must cover the whole window, the core must still be running and
+    bit 5 must be set. Pins and READ_STATUS only (gate-level safe)."""
+    spi = await start(dut)
+    fast = SpiMaster(dut, other_bits=0x00, half_period_ns=160)   # minimum half period; the write spans ~1,400 cycles
+    await spi.xfer(encode_write_imem(0, assemble_file(os.path.join(FIRMWARE, "blink.s"))))
+    await spi.xfer(encode_write_ctrl(run=True))
+    samples, state = [], {"go": True}
+    async def sampler():
+        prev = int(dut.uo_out.value) & 1; n = 0
+        while state["go"]:
+            await FallingEdge(dut.clk); n += 1
+            cur = int(dut.uo_out.value) & 1
+            if cur != prev: samples.append(n); prev = cur
+        state["cycles"] = n
+    task = cocotb.start_soon(sampler())
+    await ClockCycles(dut.clk, 60)                                # a few clean toggles first
+    await fast.xfer(encode_write_imem(0, [assemble("HALT")[0]] * 4))
+    await ClockCycles(dut.clk, 60)
+    state["go"] = False; await task
+    intervals = [b - a for a, b in zip(samples, samples[1:])]
+    assert len(samples) >= 10, ("too few uo[0] toggles across the dropped write", samples)
+    assert all(i == 10 for i in intervals), ("a toggle was shifted or missing across the dropped write", intervals)
+    assert samples[0] <= 10 and state["cycles"] - samples[-1] <= 10, ("toggles do not cover the sampled window", samples, state["cycles"])
+    st, _, _ = await status(spi)
+    assert st & 0x02 == 0x02, ("the core stopped running after a dropped write", st)
+    assert st & 0x20 == 0x20, ("a WRITE_IMEM dropped while running is not reported in bit 5", st)

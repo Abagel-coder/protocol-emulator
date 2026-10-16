@@ -30,7 +30,10 @@ Measured library data from the warm-up run: a reset flip-flop (`sg13cmos5l_dfrbp
 ## Layout
 
 ```
-src/        Verilog sources of the chip (list every file in info.yaml and test/Makefile);
+src/        Verilog sources of the chip (list the files of info.yaml `source_files` and the test
+            Makefiles); it also holds the synthesis-only blackbox
+            RM_IHPSG13_1P_512x16_c2_bm_bist.v and the flow's pdn_cfg.tcl / config.json, which are
+            not simulated;
             the warm-up fixed-function UART, kept only as the timing reference for
             test/Makefile.uartfw, lives in test/ (test/uart_tx_ref.v) and is never
             synthesised

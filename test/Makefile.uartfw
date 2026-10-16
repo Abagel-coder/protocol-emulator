@@ -22,8 +22,7 @@ export PYTHONPATH := $(PWD)/..
 SIM_BUILD				= sim_build/rtl
 VERILOG_SOURCES += $(addprefix $(SRC_DIR)/,$(PROJECT_SOURCES))
 # The instruction memory is an IHP SRAM macro; its simulation model (test/models, vendored from the
-# PDK) only instantiates the behavioural core under FUNCTIONAL. The gate-level netlist keeps the macro
-# as a black box, so GATES=yes needs the model too.
+# PDK) only instantiates the behavioural core under FUNCTIONAL.
 VERILOG_SOURCES += $(PWD)/models/RM_IHPSG13_1P_core_behavioral_bm_bist.v $(PWD)/models/RM_IHPSG13_1P_512x16_c2_bm_bist.v
 COMPILE_ARGS    += -DFUNCTIONAL
 

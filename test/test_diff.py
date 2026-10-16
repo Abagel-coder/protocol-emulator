@@ -111,7 +111,7 @@ the longest stall being 242 cycles) and 36 with the deadline equal to T. Those l
 WAITTs are what catch v0's equality rule and an inverted sign (RTL mutants W1/W2, program 1 of the
 default run) here as well as in the directed tests.
 
-Re-measured 2026-10-16 for the 512-word instruction memory (core v0.1 + SRAM; same oracle-only method,
+Re-measured 2026-10-15 for the 512-word instruction memory (core v0.1 + SRAM; same oracle-only method,
 seeds and loop, default run of 200 programs x 1500 cycles). Programs are still PROG_WORDS = 64 words
 (the preamble plus 57 random words; JMP targets are drawn from 0..63), and each is deposited TILED
 8 times over the 512 words (test/imem_load.py's load_imem for the RTL, the same image for Sim), so a
@@ -137,7 +137,7 @@ from tools import isa_defs as D
 from tools.sim import Sim
 from imem_load import load_imem
 
-# 200 x 1500 cycles ~ 15-30 s depending on machine load (Icarus, with the SRAM model). 25 let a stack-depth mutant survive (final-review-verif.md M2); the
+# 200 x 1500 cycles ~15 s idle, ~30-35 s under load (Icarus, with the SRAM model). 25 let a stack-depth mutant survive (final-review-verif.md M2); the
 # default 200 catches it (program 369 since WAITT reseeded every stream in core v0.1), which is why
 # test_core.py's call_stack_depth_4_overflow_and_ret_on_empty also pins the stack depth directly.
 N_PROGRAMS = int(os.environ.get("DIFF_PROGRAMS", "200"))

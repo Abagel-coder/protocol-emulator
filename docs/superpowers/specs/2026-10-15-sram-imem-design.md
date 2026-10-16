@@ -4,7 +4,7 @@ Status: owner decision of 2026-10-01 ("plan B": one 512x16 single-port macro, `W
 
 ## 1. Why
 
-Core v0/v0.1 spends most of its 12,757 cells on the 64-word flip-flop instruction memory (1,604 flip-flops total in the design, the memory's 1,024 among them, plus the 64:1 read mux). 64 words cannot hold real SPI or I2C firmware. The IHP `RM_IHPSG13_1P_512x16_c2_bm_bist` macro is 236.8 x 191.34 um = 45,309 um2 (lib `area`), about a quarter of today's 193,038 um2 of standard cells, and gives eight times the words. The announcement recommends SRAM and six strong entries already harden one in CI on this PDK.
+Core v0.1 spends most of its 12,561 cells on the 64-word flip-flop instruction memory (1,604 flip-flops total in the design, the same count as core v0 per `README.md`, the memory's 1,024 among them, plus the 64:1 read mux). 64 words cannot hold real SPI or I2C firmware. The IHP `RM_IHPSG13_1P_512x16_c2_bm_bist` macro is 236.8 x 191.34 um = 45,309 um2 (lib `area`), about a quarter of core v0.1's 192,394 um2 of standard cells, and gives eight times the words. The announcement recommends SRAM and six strong entries already harden one in CI on this PDK.
 
 ## 2. The macro and how it is driven
 
@@ -36,7 +36,7 @@ Behavioural model (`RM_IHPSG13_1P_core_behavioral_bm_bist.v`): `MEN && WEN` writ
 `src/pe_imem.v`, module `pe_imem #(parameter IMPL = "MACRO")`, ports `clk, active, raddr[9:0], rdata[15:0], wr_en, waddr[9:0], wdata[15:0], wr_dropped`. Two `generate` branches with identical cycle behaviour:
 
 - `g_macro`: instance `u_sram` of `RM_IHPSG13_1P_512x16_c2_bm_bist` (section 2). Flattened instance path for the flow: `u_imem.g_macro.u_sram`.
-- `g_flops`: a 512 x 16 register array with the same rule (write OR read per cycle, output holds on a write). This is the fallback for a flow failure and for the FPGA build (the FPGA workflow is disabled; flipping `IMPL` in `src/project.v` is the documented switch). `src/pe_imem_ff.v` is deleted; its behaviour lives in `g_flops`.
+- `g_flops`: a 512 x 16 register array with the same rule (write OR read per cycle, output holds on a write). This is the simulation and FPGA build (the FPGA workflow is disabled; flipping `IMPL` in `src/project.v` is the documented switch) and keeps the two implementations checkable against each other. It is NOT a chip fallback at 512 words: 8,192 flip-flops are about 400,000 um2 of flops (at about 49 um2 per `dfrbpq`) against a 902,417 um2 core, before the 512:1 read mux. A chip fallback would need a smaller depth (a `WORDS` parameter, or the 64-word memory of core v0.1). `src/pe_imem_ff.v` is deleted; its behaviour lives in `g_flops`.
 
 Address bit 9 of `raddr`/`waddr` is ignored: addresses alias modulo 512 (was 64).
 
@@ -52,7 +52,7 @@ The two PDK models are vendored to `test/models/` (Apache-2.0, `test/models/READ
 
 `.github/workflows/gds.yaml` gains a **metrics gate** after the action (`test/check_metrics.py runs/wokwi/final/metrics.json`): worst setup slack in the slow corner >= 0, worst hold >= 0, route DRC = 0, antenna violating nets = 0, LVS errors = 0. The template flow goes green on negative slack; this is the only timing check we have.
 
-Timing risk: the fetch path is now `A_DOUT` (macro clock-to-Q) -> decode -> `next_pc` -> `A_ADDR` setup inside 20 ns. Core v0.1 had +2.58 ns at 50 MHz with the flip-flop memory. If the slack goes negative, the options are (owner's call): relax `CLOCK_PERIOD` (and `clock_hz`, and the UART firmware's bit constant), or add an instruction register (changes the cycle model, out of scope here).
+Timing risk: the fetch path is now `A_DOUT` (macro clock-to-Q) -> decode -> `next_pc` -> `A_ADDR` setup inside 20 ns. Core v0.1 had +4.85 ns (slow corner, gds run 37027426422) at 50 MHz with the flip-flop memory. If the slack goes negative, the options are (owner's call): relax `CLOCK_PERIOD` (and `clock_hz`, and the UART firmware's bit constant), or add an instruction register (changes the cycle model, out of scope here).
 
 ## 7. Software and docs
 

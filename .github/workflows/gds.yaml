@@ -4,6 +4,10 @@ on:
   push:
   workflow_dispatch:
 
+concurrency:
+  group: gds-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   gds:
     runs-on: ubuntu-24.04
@@ -17,6 +21,9 @@ jobs:
         uses: TinyTapeout/tt-gds-action@ihp-cmos5l
         with:
           pdk: ihp-sg13cmos5l
+
+      - name: Metrics gate (setup/hold slack, route DRC, antenna, LVS)
+        run: python3 test/check_metrics.py runs/wokwi/final/metrics.json
 
   precheck:
     needs: gds

@@ -27,7 +27,7 @@ Written 2026-09-18, updated 2026-09-22 after the whole-branch review and its fix
 ## State
 
 - Branch `core-v0` at the commit that carries this handoff update (`git log -1`), 33 commits ahead of `main`, working tree clean, pushed. `main` is untouched since the plan commit `3546bcf`.
-- All ten plan tasks are implemented and reviewed. The whole-branch review (three lenses, 2026-09-21, `.superpowers/sdd/final-review-{rtl,verif,tools}.md`) found no Critical issue and no functional RTL bug; its fix wave (six commits `a84a0ee`..`8d0094a`, `.superpowers/sdd/final-fix-report.md`) was re-reviewed 2026-09-22 (`.superpowers/sdd/final-rereview.md`): **ready to merge**. RTL logic is unchanged since the hardened commit `f743131` (only comments and `ifdef FORMAL` properties changed; yosys cell count identical), so the baseline numbers below still describe this RTL.
+- All ten plan tasks are implemented and reviewed. The whole-branch review (three lenses, 2026-09-21, `.superpowers/sdd/final-review-{rtl,verif,tools}.md`) found no Critical issue and no functional RTL bug; its fix wave (six commits `a84a0ee`..`8d0094a`, `.superpowers/sdd/final-fix-report.md`) was re-reviewed 2026-09-22 (`.superpowers/sdd/final-rereview.md`): **ready to merge**. RTL logic is unchanged since the hardened commit `f743131` (only comments and `ifdef FORMAL` properties changed; yosys cell count identical), so the core v0 baseline table below describes the RTL of `core-v0`. It does not describe core v0.1 (branch `core-v0.1`: wrap-safe `WAITT`, the timeout adder off the advance path), whose own hardening result follows it.
 - GitHub Actions: last verified green on `721cc2a` (all four workflows). The push of that commit on 2026-09-22 is the first CI run of the new `test` steps (core/fuzzer, blocks, UART suites), of the pinned `tools` formal job, and of the gate-level run of the new host tests — check https://github.com/Abagel-coder/protocol-emulator/actions before merging; if `gl_test` fails on a new host test, the cause is an X-read at gate level (see `test/test_host.py` comments), not the RTL.
 - Local suites (2026-10-01, branch `core-v0.1`; on `core-v0` 2026-09-22 they were pytest 39, host 18, core 14 directed and 5 cover goals): pytest 44; cocotb host 19, core 19 directed + the 200-program differential fuzzer, blocks 3, UART equivalence 1, all warning-free; Verilator lint clean; `formal/core.sby` five tasks pass (`bmc`, `prove`, `cover`, `timebase_bmc`, `timebase_prove`) with properties T1 (the wrap-safe deadline rule) and its lemmas T1c-T1f, T1b (port-bit form), T2a, T2b (successor-address form), P1 reset state, P3 wait persistence, P4 deadline capture, T3/T3b/T3c, T4 parts 1-2, T4c (the simplified timeout compare), T5a-d, RUN_LINK, and 6 cover goals (`formal/README.md`).
 
@@ -44,9 +44,26 @@ Written 2026-09-18, updated 2026-09-22 after the whole-branch review and its fix
 
 Implications: the design is bigger than the 7–8K-cell estimate, mainly the 64-word flip-flop instruction memory, so the SRAM macro matters; setup slack is fine but not generous, so lanes need timing care.
 
+### Core v0.1 hardening result (GitHub `gds` run 37027426422, commit `ac0e555`, branch `core-v0.1`, all jobs green)
+
+Source: the job log (`.superpowers/sdd/gds-ac0e555.log`, git-ignored) and the run's `metrics.json`, saved unchanged as `tests/data/metrics_core_v01.json` (metric key in brackets).
+
+| Metric | Value (core v0 in brackets) |
+|---|---|
+| Standard cells | 12,561 (9,410 logic, 3,151 timing-repair, clock and antenna) [12,757 (9,561, 3,196)] |
+| Standard-cell area | 192,394 µm² (`design__instance__area__stdcell`) [193,038 µm²] |
+| Utilisation of the 6x4 core | 21.32 % (`design__instance__utilization`) [21.39 %] |
+| Setup slack @ 50 MHz, slow corner | +4.848 ns (`timing__setup__ws__corner:nom_slow_1p08V_125C`) [+2.58 ns] |
+| Hold slack (worst corner, fast) | +0.123 ns (`timing__hold__ws`) [+0.117 ns] |
+| Routing DRC / antenna violations | 0 / 0 (`route__drc_errors`, `antenna__violating__nets`) |
+| LVS / Magic DRC | 0 / 0 (`design__lvs_error__count`, `magic__drc_error__count`) |
+| Max slew / max cap / max fanout violations | 0 / 0 / 111 per corner [core v0: a max-slew warning in the slow corner, 109 max-fanout] |
+
+Core v0.1 is 196 cells smaller than core v0 and its worst setup slack is 2.27 ns higher (4.848 against 2.58 ns). The slack numbers come from `metrics.json`; the run summary is not needed.
+
 ## What is left on this branch (in order)
 
-1. **Check CI on the pushed head** (link above). Fix only if something is red.
+1. **Check CI on the pushed head** (link above). Fix only if something is red. (`core-v0.1`, commit `ac0e555`: all jobs of `gds` run 37027426422 were green; its hardening baseline is recorded above.)
 2. **Owner decisions** (open unless marked decided; the code documents the current choice):
    - Merge `core-v0` into `main` directly, or open a pull request. Not before asked.
    - **Decided 2026-10-01 (owner):** deadline compare made wrap-safe per spec §6 -- a late `WAITT` just continues, flags untouched (a miss flag was declined) -- together with moving the `t_in + tmo` adder off the `adv` path, on branch `core-v0.1` (`docs/superpowers/specs/2026-10-01-wrap-safe-deadline-design.md`).

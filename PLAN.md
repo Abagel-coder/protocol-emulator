@@ -9,6 +9,7 @@ Companion documents:
 
 ## 0. Status, and what is needed from you
 
+- Status 2026-10-15: core v0 and core v0.1 are merged into `main` (hardening rows in `README.md`); the SRAM instruction memory (plan B) is in progress on branch `sram-imem` (`docs/superpowers/plans/2026-10-15-sram-imem.md`); the re-planned schedule is at the end of section 3 (required-protocol freeze moved to Nov 8). Earlier status, kept for the record:
 - Status 2026-09-22: research done, spec v1 approved (2026-09-16), and **core v0 is implemented, hardened and reviewed** on branch `core-v0` (all ten tasks of `docs/superpowers/plans/2026-09-16-core-v0.md`; whole-branch review plus its fix wave complete; see `HANDOFF.md` and the D6 row below). Not merged: the owner decides merge vs. pull request. The next plan is lanes (pin engines), with the SRAM instruction memory and the generated field-slice macros as its open items. (The equality-only deadline compare, also listed here until then, is resolved on branch `core-v0.1`, 2026-10-01: `WAITT` is wrap-safe per spec §6, `docs/superpowers/specs/2026-10-01-wrap-safe-deadline-design.md`; reviewed, not merged.)
 - Section 4's six decisions (D1–D6) have outcomes in its decision log (D2 deferred, D3 left at the default); the schedule below is the original one and is compressed in `HANDOFF.md`.
 
@@ -81,6 +82,24 @@ The 18-week table above is the safe schedule. This is the front-loaded one: ever
 
 Dependencies on you in this schedule: the sign-up form and the GitHub repo (day 2), the FPGA kit order (this week), and approving the revised spec (day 4).
 
+### Re-planned schedule (2026-10-15)
+
+Where it stands on 2026-10-15: core v0.1 merged into `main`; the SRAM instruction memory (plan B, `docs/superpowers/plans/2026-10-15-sram-imem.md`) started the same day on branch `sram-imem`. No required protocol beyond UART TX exists yet, so the Nov 2 freeze for all three is not reachable; the dates below move it one week and keep Nov 23 as the hard stop the original schedule set.
+
+| Window | Work | Done when |
+|---|---|---|
+| Oct 15 – 19 | **Plan B, SRAM instruction memory:** `pe_imem` + unit tests, chip integration + 512-word tools/tests + `READ_STATUS` bit 5, flow config (Loom stripe grid) + metrics gate, first CI harden and its fix ladder; owner asked before merge | `gds`, `precheck`, `gl_test`, `test` green with the macro; setup slack >= 0 in the gate; README results row |
+| Oct 20 – 26 | **Plan C part 1:** UART RX firmware + a timing-checking reference model; SPI master modes 0-3 firmware + model (programs now fit in 512 words) | cocotb equivalence suites green in CI |
+| Oct 27 – Nov 8 | **Plan C part 2:** I2C master firmware + model (clock stretching, NACK); datasheet (`docs/info.md`) protocol sections | I2C transactions verified against the model in CI |
+| **Sun Nov 8** | **Required-protocol freeze (moved from Nov 2)** | UART/SPI/I2C firmware and models in CI; datasheet current |
+| Nov 9 – 22 | **Plan A:** README as evidence ledger + `docs/JUDGES.md`; MCY mutation score and EQY netlist equivalence in CI; FPGA bring-up if the kit has arrived | ledger generated in CI; judge page live |
+| **Mon Nov 23** | Hard stop from the original schedule: whatever exists is the submission baseline; stretch work only on branches after this | tag `baseline-2026-11-23` |
+| Nov 24 – Dec 14 | One stretch item, chosen then: edge-timestamp capture (USB-LS/autobaud), or I2C contention/clock-stretch monitor, or lane v0; light load during finals | additive, reversible |
+| Dec 15 – Jan 11 | Final hardens, write-up, demo video | |
+| Jan 12 – 15 | Submit (deadline Mon Jan 18) | |
+
+Dependencies on the owner: the merge decision after each plan's CI harden (B, then C, then A); the organiser's reply on 8x4 tiles (mail from asic-competition@janestreet.com, ~2026-09-28); the FPGA kit arrival date; the AI-use rule on the final form.
+
 ## 4. Decisions needed (answer these first)
 
 | # | Decision | Options | Recommendation |
@@ -101,7 +120,7 @@ Dependencies on you in this schedule: the sign-up form and the GitHub repo (day 
 | D3 | Not discussed; the SPI-slave host port stands as the default. |
 | D4 | You will order the FPGA kit. It is not required for submission (see the FPGA note below). Order by mid-October so it arrives before the hardware weeks (7–10). |
 | D5 | **Decided: 6x4.** 8x4 is unconfirmed for cmos5l (no 8x4 entry in the cmos5l tile table yet) and the draft design uses roughly a third of 6x4, so extra area would not change the outcome. |
-| D6 | **2026-09-16: spec v1 and N1–N10 approved by you.** Implementation plan for core v0: `docs/superpowers/plans/2026-09-16-core-v0.md` (10 tasks: ISA generator, assembler, simulator, timebase/GPIO, core, host SPI port, differential test, UART equivalence, formal proofs, harden). GitHub repo: https://github.com/Abagel-coder/protocol-emulator. Earlier: research done (2026-09-15 evening): `docs/research/prior-art-academic.md`, `prior-art-industry.md`, `verification-novelty.md`, distilled into `docs/research/novelty-synthesis.md` with decisions N1–N10. The design spec is now v1 and incorporates them; **N1–N10 and the v1 spec await your approval.** Headline: the timing contract is a machine-checked theorem; lanes carry line coding, bit-stuffing and CRC; contention monitor and edge-timestamp capture; every wait is bounded. **Core v0 done on 2026-09-18: 12,757 cells, 21.39% utilisation, +2.58 ns setup slack; next plan: lanes (pin engines).** |
+| D6 | **2026-09-16: spec v1 and N1–N10 approved by you.** Implementation plan for core v0: `docs/superpowers/plans/2026-09-16-core-v0.md` (10 tasks: ISA generator, assembler, simulator, timebase/GPIO, core, host SPI port, differential test, UART equivalence, formal proofs, harden). GitHub repo: https://github.com/Abagel-coder/protocol-emulator. Earlier: research done (2026-09-15 evening): `docs/research/prior-art-academic.md`, `prior-art-industry.md`, `verification-novelty.md`, distilled into `docs/research/novelty-synthesis.md` with decisions N1–N10. The design spec is now v1 and incorporates them; **N1–N10 and the v1 spec await your approval.** Headline: the timing contract is a machine-checked theorem; lanes carry line coding, bit-stuffing and CRC; contention monitor and edge-timestamp capture; every wait is bounded. **Core v0 done on 2026-09-18: 12,757 cells, 21.39% utilisation, +2.58 ns setup slack. Core v0.1 (wrap-safe `WAITT`, branch `core-v0.1`) hardened 2026-10-02 (`gds` run 37027426422, commit `ac0e555`): 12,561 cells, 21.32% utilisation, +4.85 ns setup slack (`nom_slow_1p08V_125C`), +0.123 ns hold slack, 0 max-slew violations; next plan: lanes (pin engines).** |
 
 **FPGA note.** Submission needs only the GDS flow, RTL simulation and gate-level simulation, all of which run without hardware. The kit buys three things: proof against real devices (a PC's USB host or NIC cannot be faked convincingly in simulation), early detection of pin-direction and reset mistakes, and demo footage for the write-up. Its iCE40 UP5K has 5280 LUTs, so the full design may need a reduced configuration (2 lanes, smaller instruction memory in block RAM) to fit; any iCE40 HX8K or ECP5 board with jumper wires is a workable substitute.
 

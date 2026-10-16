@@ -622,6 +622,9 @@ async def write_imem_while_running_is_dropped_and_flagged(dut):
     assert st & 0x03 == 0x02, ("the HALT written while running landed: the core stopped", st)
     assert st & 0x20 == 0x20, ("a WRITE_IMEM dropped while running is not reported in bit 5", st)
     await spi.xfer(encode_write_ctrl(run=False))                  # pause: writes are accepted again
+    st, _, _ = await status(spi)
+    assert st & 0x20 == 0x20, ("bit 5 not sticky across the pause and a status read", st)
+    assert st & 0x02 == 0, ("core still reports running after run=0", st)
     await spi.xfer(encode_write_imem(0, [halt, 0]))
     await spi.xfer(encode_write_ctrl(run=True, reset=True))
     await ClockCycles(dut.clk, 20)

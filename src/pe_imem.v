@@ -6,7 +6,9 @@
 // that arrives while the core is active is dropped and reported for that cycle on wr_dropped
 // (pe_host_spi keeps it as READ_STATUS bit 5). During an accepted write the read output holds its
 // previous word (A_REN low: no write-through), so a paused core's stalled instruction word is
-// unchanged when RUN returns; the next cycle reads raddr again. Address bit 9 is ignored:
+// unchanged when RUN returns (unless a write is accepted in the last inactive cycle, which only the
+// asynchronous RUN pin rising during a WRITE_IMEM can do: ir then holds the old word for the first
+// active cycle and the new one after; load with RUN low); the next cycle reads raddr again. Address bit 9 is ignored:
 // addresses alias modulo 512. Contents are undefined at power-up: load before RUN.
 module pe_imem #(
     parameter IMPL = "MACRO"

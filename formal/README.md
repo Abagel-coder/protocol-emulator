@@ -215,11 +215,18 @@ nobody mistakes it for a property of `pe_core.v` alone:
 - **H3 (as for T4): the instruction word under a stalled `pc` does not change.** `imem_data` is
   free every cycle in `core_props.v`, so T1c requires `imem_data == $past(imem_data)` in its
   antecedent. On the chip `pe_imem` returns the same word for the same address, and since the SRAM
-  instruction memory this is enforced by hardware rather than by host discipline: `pe_imem` drops
-  a host write that arrives while the core is active (running, including stalled in a wait) and
-  reports it in `READ_STATUS` bit 5, so the word under an active stall cannot change. Writes are
-  accepted only while the core is inactive (paused, halted or in reset); a word rewritten while
-  the core is paused is the one it decodes when RUN returns.
+  instruction memory it also drops a host write that arrives while the core is active (running,
+  including stalled in a wait) and reports it in `READ_STATUS` bit 5, so once the core is active
+  the word under a stalled `pc` cannot change -- with one exception: a write accepted in the last
+  inactive cycle. During an accepted write the read output holds the old word, so if the core
+  becomes active in the next cycle it decodes the old word in its first active cycle and the new
+  word from the second (re-read under the same stalled `pc`). Only the asynchronous RUN pin can
+  produce this, rising during a `WRITE_IMEM` to the paused `pc`; `WRITE_CTRL` cannot, because its
+  bytes are at least 128 clocks apart. The flip-flop memory had the same race. Loading with RUN
+  low, as `docs/info.md` requires, avoids it, so H3 stays a hypothesis with this narrowed scope,
+  not a property enforced by hardware. Writes are accepted only while the core is inactive
+  (paused, halted or in reset); a word rewritten while the core is paused is the one it decodes
+  when RUN returns, provided at least one inactive cycle follows the write (the same exception).
 
 `Rn` itself needs no hypothesis: no register is written in a cycle without `adv`, which the
 solver sees directly. T1, T1d, T1e and T1f need neither hypothesis (T1/T1d/T1e are same-cycle;
@@ -285,8 +292,10 @@ exactly three hypotheses about the environment beyond what facts 1-3 state:
   Nothing proved in this proof set rules out the *harness* re-decoding the stalled `pc` as a
   different instruction (not a wait at all, say) on some later cycle. On the real chip this is
   guaranteed by the synchronous-read instruction memory `pe_imem`, which always returns the
-  same word for the same address and drops host writes while the core is active (a hardware rule
-  since the SRAM instruction memory, no longer host discipline) -- not by anything proved here.
+  same word for the same address and drops host writes while the core is active, except for a
+  write accepted in the last inactive cycle (only the asynchronous RUN pin rising during a
+  `WRITE_IMEM` to the paused `pc` can produce one; loading with RUN low avoids it) -- not by
+  anything proved here.
 
 Because all three hypotheses are about the *environment* during the wait rather than about the
 RTL itself, and because SymbiYosys's BMC/k-induction prove safety invariants, not

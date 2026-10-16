@@ -63,7 +63,7 @@ def test_program_size_limit():
     assert len(w(".org 511\nNOP")) == 512
     assert len(w("NOP\n" * 512)) == 512
     with pytest.raises(AsmError, match="line 1: .org 0x200 is outside the 512-word"): w(".org 512\nNOP")
-    with pytest.raises(AsmError): w("NOP\n" * 513)
+    with pytest.raises(AsmError, match="line 513: program does not fit: address 0x200 is beyond the 512-word instruction memory"): w("NOP\n" * 513)
     # max_words=None lifts the limit to the 10-bit PC
     assert len(assemble("NOP\n" * 513, max_words=None)) == 513
     with pytest.raises(AsmError, match="beyond the 1024-word"): assemble(".org 1023\nNOP\nNOP", max_words=None)

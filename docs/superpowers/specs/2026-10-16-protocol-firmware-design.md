@@ -10,7 +10,7 @@ Three firmware programs for the core, each with a reference model that was writt
 |---|---|---|---|
 | UART receiver, 115200 baud, 8N1 | `firmware/uart_rx.s` | `tools/refmodels/uart_rx_ref.py` (line stimulus generator + frame-timing checker) | `test/Makefile.uartrx`, `test/test_uart_rx_fw.py` |
 | SPI master, modes 0–3, 1 MHz | `firmware/spi_master.s` | `tools/refmodels/spi_slave_ref.py` (slave + edge/phase/setup checker) | `test/Makefile.spifw`, `test/test_spi_fw.py` |
-| I2C master, 7-bit address, standard mode 100 kHz | `firmware/i2c_master.s` | `tools/refmodels/i2c_slave_ref.py` (slave + standard-mode timing checker) | `test/Makefile.i2cfw`, `test/tb_i2cfw.v`, `test/test_i2c_fw.py` |
+| I2C master, 7-bit address, standard mode 100 kHz | `firmware/i2c_master.s` | `tools/refmodels/i2c_slave_ref.py` (slave + standard-mode timing checker; it also computes the wired-AND bus levels, so the suite needs no testbench of its own) | `test/Makefile.i2cfw`, `test/test_i2c_fw.py` |
 
 Done means: all three suites green in CI; each reference model is shown — by a test that stays in the suite — to reject a timing mutant of its firmware; a datasheet section per protocol in `docs/info.md`; `HANDOFF.md` and `PLAN.md` record the state.
 
@@ -35,7 +35,7 @@ Done means: all three suites green in CI; each reference model is shown — by a
 **Reference-model architecture.** Each model is a plain-Python, cycle-stepped object with one method, `step(outputs) -> inputs`: it is given the levels the chip drives in the current cycle and returns the levels it drives for the next one, recording events and timing violations as it goes. The same class runs in two harnesses:
 
 - the **oracle harness** (pytest, `tests/test_fw_*.py`): `tools/sim.py` executes the firmware; the harness feeds the model's levels to `Sim.set_inputs()` two cycles late (the chip's two-flop input synchroniser, the convention of `test/test_diff.py`) and drains `sim.core_to_host` every cycle, timestamping each pushed word. Fast (about a second per test), run by the `tools` workflow;
-- the **RTL harness** (cocotb, `test/fw_harness.py`): the full chip through its Tiny Tapeout pins, firmware loaded and prescale set over the host SPI port, one model step per falling clock edge, a monitor on the core→host FIFO push (`user_project.u_core.c2h_push`/`c2h_data`, RTL only) for exact push cycles, plus — in one test per protocol — the words read back through `POP_FIFO` to cover the real host path end to end.
+- the **RTL harness** (cocotb, `test/fw_harness.py`): the full chip through its Tiny Tapeout pins, firmware loaded and prescale set over the host SPI port, one model step per falling clock edge, a monitor on the core→host FIFO push (`user_project.u_core.c2h_push`/`c2h_data`, RTL only) for exact push cycles, and a host-side drain task that keeps reading words back through `POP_FIFO` while the model runs (the FIFO is four entries deep, so without it the core's later pushes would be dropped); every test checks that the drained words equal the monitored ones, which covers the real host path end to end.
 
 A test passes when the model records no violation and the firmware's pushed words (value and cycle window) equal the model's expectation. Both harnesses start `T` away from zero (the RTL by construction; the oracle with `t0 = 0xFF00`, so deadlines cross the 16-bit wrap early).
 
@@ -67,7 +67,7 @@ The sample instants are the detected edge plus 0.5, 1.5, …, 9.5 bits; the only
 - `glitch=n`: a low pulse of `n` cycles (shorter than half a bit) with no frame — nothing may be pushed;
 - `gap=n` idle cycles before the frame (0 allowed: back-to-back frames).
 
-The checker (`check(pushes)`) requires exactly the expected words, in order, each pushed within [ideal stop-bit sample − 12.5 % bit, ideal stop-bit sample + 12.5 % bit + 32 cycles]: this pins the stop-bit sample instant for every frame, not only probe frames. The 32 cycles are the push latency after the sample (the firmware's stop-bit handling is under 10 instructions; the bound is loose on purpose and stated in the docstring).
+The checker (`check(pushes)`) requires exactly the expected words, in order, each pushed within [ideal stop-bit sample − 12.5 % bit, ideal stop-bit sample + 12.5 % bit + 32 cycles], where the ideal sample instant is the start edge plus 9.5 bits at the *nominal* baud rate (a receiver samples on its own clock, so for a frame with a baud error this still lies inside the transmitted stop bit): this pins the stop-bit sample instant for every frame, not only probe frames. The 32 cycles are the push latency after the sample (the firmware's stop-bit handling is under 10 instructions; the bound is loose on purpose and stated in the docstring).
 
 **Tests** (same cases in `tests/test_fw_uart_rx.py` on the oracle and `test/test_uart_rx_fw.py` on the RTL): nominal bytes incl. 0x00, 0xFF, 0x55, 0xAA, back-to-back frames; baud −4 % and +4 %; probe frames; framing error followed by a good frame; a glitch; a long idle gap; one RTL test reads the words back through `POP_FIFO`. Sentinel: `BIT 210` (3 % fast) must be rejected by the probe frames.
 
@@ -75,7 +75,7 @@ The checker (`check(pushes)`) requires exactly the expected words, in order, eac
 
 **Protocol.** Mode = {CPOL, CPHA}. CPOL is the idle SCK level. The leading edge of each bit is the edge away from idle; CPHA=0 samples on the leading edge and shifts (changes MOSI) on the trailing one with the first bit set up before the first edge, CPHA=1 shifts on the leading edge and samples on the trailing one. MSB first, 8 bits per byte, CS_n active low for a whole transaction of one or more bytes. Nominal SCK 1 MHz at 50 MHz: firmware constants `PRESCALE 0`, `HALF 25` (ticks per half period), `CSLEAD 25` (CS_n assert → first edge), `CSLAG 25` (last edge → CS_n deassert), `CSIDLE 25` (minimum CS_n high between transactions).
 
-**Host words.** Command (host → core): bits 7:0 = byte to transmit; bit 8 = LAST (deassert CS_n after this byte); bits 10:9 = mode = {CPOL, CPHA}. The mode of a transaction is taken from its first word (CS_n high when it is popped); later words of the same transaction are assumed to carry the same mode. Result (core → host): bits 7:0 = the byte received on MISO during that byte; one result per command, pushed after the byte's last edge.
+**Host words.** Command (host → core): bits 7:0 = byte to transmit; bit 8 = LAST (deassert CS_n after this byte); bits 10:9 = mode = {CPOL, CPHA}. Every word carries the mode; CPOL (the idle level) is applied when a transaction starts (CS_n high when the word is popped) and CPHA is read from each word, so the host must keep the mode constant within a transaction. Result (core → host): bits 7:0 = the byte received on MISO during that byte; one result per command, pushed after the byte's last edge.
 
 **Firmware behaviour.** `uo` resets to 0, so the first instruction raises CS_n. Then forever: wait for a command (`WAITF RXV`), pop it, re-anchor `SETT R1`. If CS_n is high (new transaction): set SCK to the CPOL idle level, lower CS_n, `R1 = T + CSLEAD`. Per byte, with `R1` the time of the first half-step:
 
@@ -86,11 +86,11 @@ So for CPHA=0 the first bit enters the loop at the MOSI step (no toggle: SCK is 
 
 **Reference model** (`SpiSlaveRef(clk_hz, sck_hz, mode, miso_bytes, miso_window=None)`): an SPI slave written from the mode definitions, which also judges the master:
 
-- SCK must sit at the idle level whenever CS_n is high (checked from the first time CS_n is seen high after reset — `uo` resets low, so the model ignores the cycles before that), at CS_n's falling edge and at its rising edge;
+- SCK must sit at the transaction's CPOL at CS_n's falling edge, between its bytes and at its rising edge; while CS_n is high (checked from the first time it is seen high after reset — `uo` resets low) SCK may change level at most once, the switch to the next transaction's CPOL;
 - the first edge after CS_n falls must be the leading edge for the mode and come at least `CSLEAD_MIN = clk_hz / sck_hz / 2 − 2` cycles after it; the last edge must precede CS_n's rise by at least the same; every edge-to-edge interval within a byte is `clk_hz / sck_hz / 2 ± 1` cycles (the master is deadline-driven, so the tolerance is the prescaler phase only); between bytes the gap may be longer but SCK must stay idle;
 - MOSI is sampled at the sampling edge of each bit and must be stable from `P/4` cycles before it to `P/4` after (setup/hold, `P` = the nominal period); the byte is assembled MSB first;
 - MISO is driven MSB first from `miso_bytes`: each bit becomes valid `t_co = 5` cycles after the shifting edge (for CPHA=0 the first bit `t_co` after CS_n falls) and holds until the next shifting edge. With `miso_window = w`, the bit is valid only within ±`w` cycles of the sampling edge and its complement elsewhere (default off; the tests use `w = P/8`): the sampling-edge check;
-- a transaction must contain a multiple of 16 edges; the model records the MOSI bytes it received and the CS_n assert/deassert cycles.
+- a transaction must contain a multiple of 16 edges; the model records the MOSI bytes it received and the CS_n assert/deassert cycles. With the window on, the first bit of a CPHA=0 transaction (whose sampling edge cannot be predicted from an earlier edge) is driven plainly from CS_n's fall.
 
 **Tests** (oracle `tests/test_fw_spi.py`, RTL `test/test_spi_fw.py`): for each of the four modes, a three-byte transaction with asymmetric data (0x81, 0x3C, 0xA5 out; 0xC3, 0x0F, 0x96 back) with the MISO window on; two consecutive transactions with a mode change between them; a single-byte transaction; a transaction whose words arrive late (gap between bytes); one RTL test reads the results back through `POP_FIFO`. Sentinel: `HALF 27` (an 8 % slow clock) must be rejected in every mode by the edge-interval check. (A swapped CPHA mask is a review mutant: it changes modes 1 and 2 only, and the MISO window and MOSI stability checks must catch it there.)
 
@@ -107,16 +107,16 @@ So for CPHA=0 the first bit enters the loop at the MOSI step (no toggle: SCK is 
 - Read bit: at +Q release SDA; at +2Q `scl_hi`; Q after the rise read SDA (`IN`); 2Q after the rise pull SCL low.
 - A write byte is eight write bits then a read bit (the ACK; its value becomes result bit 8). A read byte is eight read bits then a write bit (the ACK control from command bit 0).
 - STOP (if bit 9): at +Q pull SDA low; at +2Q `scl_hi`; 2Q after the rise release SDA (tSU;STO); wait 2Q more (tBUF) before the next command is processed.
-- `scl_hi`: release SCL; after four cycles (the pull-up is immediate in the model and the synchroniser needs two) read SCL — if it is still low set STRETCHED; `WAITP UIO, 1, HIGH, R0`; on timeout jump to the abort path (release both lines, set TIMEOUT, push the result, back to the command loop — return addresses left on the call stack by the abandoned routines are harmless: the stack keeps the four most recent and later calls overwrite them); otherwise `SETT R1` at the rise.
+- `scl_hi`: release SCL; after five cycles (the pull-up is immediate in the model, the released level is on the pin the cycle after the instruction and the synchroniser needs two more) read SCL — if it is still low set STRETCHED; `WAITP UIO, 1, HIGH, R0`; on timeout jump to the abort path (release both lines, set TIMEOUT, push the result, back to the command loop — return addresses left on the call stack by the abandoned routines are harmless: the stack keeps the four most recent and later calls overwrite them); otherwise `SETT R1` at the rise.
 - `WAITF TXE`, `PUSH` the result.
 
-The SCL high time is measured from the observed rise (minus the four-cycle detection latency, 80 ns) so the standard-mode minimums hold with and without stretching; the period is 10.24 µs so fSCL stays under 100 kHz.
+The SCL high time is measured from the observed rise (minus the five-cycle detection latency, 100 ns) so the standard-mode minimums hold with and without stretching; the period is 10.24 µs so fSCL stays under 100 kHz.
 
 **Reference model** (`I2cSlaveRef(clk_hz, address, read_data, ...)`): a slave written from the bus definition, which also judges the master. It watches the wired-AND bus levels and drives its own two pull-downs:
 
 - bus decoding: START/repeated START (SDA falls while SCL high), STOP (SDA rises while SCL high), bits sampled on SCL rising edges, nine-bit bytes; any other SDA change while SCL is high is a violation;
 - timing: every interval of the standard-mode table above, measured on the bus (so a stretched low still satisfies tLOW), reported with the violating cycle;
-- slave behaviour: ACKs its own address (either R/W), NACKs any other; stores written bytes; serves `read_data` on reads and stops driving after a NACK from the master; options `nack_data_after=n` (NACK the n-th written byte), `stretch_after_byte=(k, cycles)` (hold SCL low for `cycles` after the ACK bit of byte `k`; `cycles = None` holds it for good, the timeout case), and a data-setup check that the master never reads SDA before the slave's own tSU;DAT;
+- slave behaviour: ACKs its own address (either R/W), NACKs any other; stores written bytes; serves `read_data` on reads and stops driving after a NACK from the master; options `nack_data_after=n` (NACK the n-th written byte), `stretch_after_byte=(k, cycles)` (hold SCL low for `cycles` after the ACK bit of byte `k`; longer than the master's 65,535-tick timeout is the timeout case), and the wired-AND of the master's and its own pull-downs, which is what the chip's `uio_in` is driven with;
 - records every byte with its direction and ACK, and the START/STOP cycles.
 
 **Tests** (oracle `tests/test_fw_i2c.py`, RTL `test/test_i2c_fw.py`): write 2 bytes to address 0x50 with STOP; read 2 bytes (ACK, then NACK + STOP); write-then-repeated-START-read (the EEPROM pattern); address NACK (0x51) reported in bit 8; data NACK reported; stretch of 20 µs after the address ACK — transfer correct, STRETCHED set on that command only; stretch forever — TIMEOUT set, lines released, and the next command (a START) succeeds once the slave lets go; one RTL test reads results back through `POP_FIFO`. Sentinel: `Q 96` (tLOW 3.84 µs) must be rejected by the timing checker.
@@ -124,7 +124,7 @@ The SCL high time is measured from the observed rise (minus the four-cycle detec
 ## 6. Documentation and CI
 
 - `docs/info.md`: a "Protocol firmware" section with the pin map, one subsection per protocol (constants and the prescale, host word formats, what the reference model checks, the suite and test names, the measured firmware size in words), and the clock-change note (the `.equ` block per file, plus `CLK_HZ` in the tests).
-- `.github/workflows/test.yaml`: three new steps after the UART equivalence step, each with its own `COCOTB_RESULTS_FILE` and `grep failure` guard; the pytest step already runs the oracle tests. `README.md` "What CI runs" and `test/README.md` list the new suites.
+- `.github/workflows/test.yaml`: three new steps after the UART equivalence step, each with its own `COCOTB_RESULTS_FILE` and `grep failure` guard; the `tools` workflow's pytest step already runs the oracle tests. `README.md` "What CI runs" and `test/README.md` list the new suites.
 - `HANDOFF.md`, `PLAN.md`: state, suite counts, decision log entry for plan C.
 
 ## 7. Out of scope

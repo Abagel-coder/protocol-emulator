@@ -18,6 +18,8 @@
   "//": "CLOCK_PERIOD - Increase this in case you are getting setup time violations.",
   "//": "The value is in nanoseconds, so 20ns == 50MHz.",
   "CLOCK_PERIOD": 20,
+  "//": "SYNTH_STRATEGY: delay-oriented ABC script. Measured on the SRAM-macro design (2026-10-17): AREA 0 gave -0.74 ns slow-corner setup slack, DELAY 1 +0.65 ns, DELAY 4 +1.37 ns (docs/superpowers/specs/2026-10-16-fetch-loop-timing-design.md section 3).",
+  "SYNTH_STRATEGY": "DELAY 4",
 
   "//": "Hold slack margin - Increase them in case you are getting hold violations.",
   "PL_RESIZER_HOLD_SLACK_MARGIN": 0.1,

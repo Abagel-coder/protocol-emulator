@@ -1,6 +1,6 @@
 # Plan C: required-protocol firmware with independent reference models — design
 
-Date: 2026-10-16. Status: **drafted by the controller from the owner's 2026-10-01 decision** (plan C = the three required protocols, each with an independent timing-checking reference model); not yet reviewed by the owner. Branch: `protocol-fw`, off `sram-imem` at `a850747`. Nothing in this plan changes the RTL, the ISA or the oracle's semantics.
+Date: 2026-10-16. Status: **implemented on branch `protocol-fw` (2026-10-17), pending owner review.** Drafted by the controller from the owner's 2026-10-01 decision (plan C = the three required protocols, each with an independent timing-checking reference model). Branch: `protocol-fw`, off `sram-imem` at `a850747`. Nothing in this plan changes the RTL, the ISA or the oracle's semantics.
 
 ## 1. Goal
 

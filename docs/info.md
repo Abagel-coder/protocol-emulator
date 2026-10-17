@@ -54,6 +54,28 @@ Caveats worth knowing when driving the port:
 - The timebase `T` free-runs from reset, whatever the core does. While RUN is low (or the core is halted) a wait in progress keeps its deadline but `T` keeps counting. A `WAITT` whose deadline passes meanwhile completes in the first cycle after RUN returns, provided `T` is then at most 32,767 ticks past the deadline (`test/test_host.py::run_low_across_deadline_resumes_immediately`); after a longer pause the deadline can count as ahead again -- only the 16-bit difference `T - Rn` is compared -- and the `WAITT` then waits up to 32,768 ticks for `T` to reach it (32,768 ticks is about 655 us at 50 MHz with prescale 0, about 168 ms with prescale 255). A timed wait (`WAITP`/`WAITF`) whose captured timeout passes meanwhile times out only when `T` comes round to it again, up to 65,536 ticks later, so do not pause a core across a timeout it needs.
 - `WRITE_PRESCALE` takes effect on the next clock. If the new value is below the prescaler's current count, that one tick interval stretches to as many as 256 clocks (the 8-bit counter runs on to 255 and wraps before matching the new value); later ticks are exact.
 
+## Protocol firmware
+
+Protocols are implemented in firmware: the core reads and writes the protocol pins against exact timebase deadlines, and each firmware program is tested on the chip RTL against a reference model written from the protocol's own definition (not from the firmware). Protocol pins are `ui[3:0]` (inputs), `uo[6:0]` (outputs) and `uio[7:0]` (bidirectional); `ui[7:4]` and `uo[7]` belong to the host port.
+
+| Signal | Pin | Direction |
+|---|---|---|
+| UART TX (`firmware/uart_tx.s`) | `uo[0]` | out |
+| UART RX (`firmware/uart_rx.s`) | `ui[0]` | in |
+| SPI SCK / MOSI / CS_n | `uo[1]` / `uo[2]` / `uo[3]` | out |
+| SPI MISO | `ui[1]` | in |
+| I2C SDA / SCL | `uio[0]` / `uio[1]` | open-drain: `uio_out` bit stays 0, `OE` set = pull low, `OE` clear = released |
+
+**Timing constants.** Each firmware file states the clock it was computed for (50 MHz) in its header comment and keeps every timing constant in one `.equ` block at the top, each with its formula; no timing number appears anywhere else in the file. The block also holds `.equ PRESCALE n`, the `WRITE_PRESCALE` value (one tick = n+1 cycles) the constants assume. The tests read `PRESCALE` from the firmware source (`tools.asm.constants()`) and program it over the host port, so the host side cannot drift from the firmware; nothing else in the block is used by a test: the reference models take their timing from the protocol parameters and `CLK_HZ = 50_000_000`, declared at the top of each test module. Retargeting a firmware to another clock (e.g. 40 MHz) is one edit to its `.equ` block (and `CLK_HZ` in its tests). All waits are `SETT`/`ADDT` relative deadlines, since `T`'s value at start is unspecified.
+
+### UART receiver (firmware/uart_rx.s)
+
+8N1 at 115200 baud on `ui[0]`, 33 instruction words. Constants: `PRESCALE 1` (tick = 2 cycles), `BIT 217` (ticks per bit = 50e6 / 115200 / 2), `HALF 108` (ticks from the detected start edge to the middle of the start bit = BIT / 2). The firmware waits for a falling edge (`WAITP`; on the 65,535-tick timeout it simply waits again), samples the middle of the start bit and goes back to waiting if the line is high again (false-start rejection), then samples the eight data bits (LSB first) and the stop bit at the detected edge plus 1.5, 2.5, ... 9.5 bits. Each frame is pushed to the core->host FIFO as one word: `{frame_error[8], data[7:0]}`, bit 8 set when the stop bit read low; read it with `POP_FIFO`. The push does not wait for room: a frame that arrives while the 4-entry FIFO is full is dropped, so the host must drain faster than 11,520 words/s. The push comes 6 to 9 cycles after the ideal stop-bit sample instant (start edge + 9.5 bits) in the test cases (oracle and RTL).
+
+The reference model (`tools/refmodels/uart_rx_ref.py`) generates the line and checks the pushed words. A frame passes when exactly the expected words are pushed, in order, each within [ideal stop sample - bit/8, ideal stop sample + bit/8 + 32 cycles] (the stop sample measured at the nominal baud rate, so this pins the sample instant on every frame). The cases: nominal bytes (0x55, 0x00, 0xFF, 0xAA, 0xA3, back to back); a whole frame at 115200 x (1 - 4 %) and x (1 + 4 %); probe frames, whose data bits carry their value only within +-bit/8 of the ideal sample instant and the complement elsewhere (so sampling outside the middle quarter of a bit reads a wrong byte); a framing error (stop bit low, bit 8 set) followed by a good frame; a 100-cycle glitch (nothing may be pushed) followed by a good frame; a 140,000-cycle idle gap (the edge wait times out once and rearms).
+
+Suite: `test/Makefile.uartrx` (`test/test_uart_rx_fw.py`: `uart_rx_nominal`, `uart_rx_slow_4pct`, `uart_rx_fast_4pct`, `uart_rx_probe`, `uart_rx_framing`, `uart_rx_glitch`, `uart_rx_long_idle`, and `uart_rx_sentinel_mutant_is_rejected`, which assembles the firmware with `BIT 210` (3 % fast) and requires the model to reject it). Every case also reads the words back over `POP_FIFO` while it runs and checks them against the monitored pushes. The same cases run on the Python oracle in `tests/test_fw_uart_rx.py`.
+
 ## How to test
 
 1. Apply the clock and release reset with `ui[7]` (RUN) held low and CS_n high. After reset the core is halted, `uio_oe == 0`, and all outputs are 0 (`test/test_host.py::post_reset_state_and_running_bit` checks this on the pins).

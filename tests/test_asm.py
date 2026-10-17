@@ -120,3 +120,8 @@ def test_org_clobber_raises():
     backward-.org check, the only one left: the pass-2 duplicate was dead code)."""
     with pytest.raises(AsmError, match="line 3: .org 0x0 moves backwards from 0x1"):
         w(".org 0\n  NOP\n.org 0\n  NOP")
+
+def test_constants_returns_the_equ_table():
+    from tools.asm import constants
+    assert constants(".equ A 5\n.equ B, 0x10\nlbl:\n  NOP\n") == {"A": 5, "B": 16}
+    assert constants("NOP\n") == {}

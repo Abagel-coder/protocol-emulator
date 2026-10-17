@@ -27,7 +27,7 @@ jobs:
       # own results file (COCOTB_RESULTS_FILE) and check every one for a <failure> element,
       # because make returns success even when a test fails. The Makefiles export
       # PYTHONPATH=$(PWD)/.. themselves so the tests can import tools/ (Makefile.core,
-      # Makefile.uartfw, Makefile.uartrx, Makefile.spifw, Makefile).
+      # Makefile.uartfw, Makefile.uartrx, Makefile.spifw, Makefile.i2cfw, Makefile).
       - name: Host / top-level tests (test/Makefile, test_host)
         run: |
           cd test
@@ -64,6 +64,12 @@ jobs:
           cd test
           COCOTB_RESULTS_FILE=results_spifw.xml make -B -f Makefile.spifw
           ! grep failure results_spifw.xml
+
+      - name: I2C master firmware vs reference slave (test/Makefile.i2cfw)
+        run: |
+          cd test
+          COCOTB_RESULTS_FILE=results_i2cfw.xml make -B -f Makefile.i2cfw
+          ! grep failure results_i2cfw.xml
 
       - name: Test Summary
         uses: test-summary/action@v2.4

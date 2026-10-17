@@ -4,7 +4,14 @@ bit low; 8 data bits LSB first; stop bit high; every bit clk_hz / baud cycles lo
 Tolerances (spec, not firmware): a frame's result must be pushed within
 [stop sample - bit/8, stop sample + bit/8 + PUSH_SLACK] cycles, where the stop sample is the start
 edge + 9.5 bits at the nominal baud rate; probe frames carry each data bit's value only within
-+-bit/8 of its nominal sample instant and the complement elsewhere.
++-bit/8 of its nominal sample instant and the complement elsewhere; a probe frame's stop bit is high
+only within +-bit/8 of its nominal sample instant (start edge + 9.5 bits) and low elsewhere, so a
+receiver that samples the stop bit outside that window reports a framing error, which the
+expectation (no bit 8) rejects. That low tail after the sample window is a deliberate glitch: a real
+line never goes low after the stop bit except for a start bit, so the tail is only meaningful if the
+receiver gets a chance to reject it through its false-start check. schedule() therefore raises
+ValueError when a probe frame is followed by a frame whose gap is below bit/4 cycles (the default
+gap, 2 bits, is fine).
 
 Positions are kept in floating point (cycles since the model's first step) and converted with
 int() at each boundary, so a 434.03-cycle bit never accumulates rounding drift. The model is driven
@@ -45,7 +52,11 @@ class UartRxRef:
             if n > 0: line.extend([level] * n)
 
         fill(pos, 1)
-        for f in frames:
+        min_gap = int(self.cpb) // 4
+        for prev, f in zip([None] + list(frames), frames):
+            if prev is not None and prev.probe and f.gap is not None and f.gap < min_gap:
+                raise ValueError("a probe frame must be followed by a gap of at least bit/4 cycles: "
+                                 "its stop-bit tail is a deliberate glitch the receiver must reject")
             pos += 2 * self.cpb if f.gap is None else f.gap
             fill(pos, 1)                                               # idle gap
             if f.glitch is not None:
@@ -55,7 +66,7 @@ class UartRxRef:
             bits = [0] + [(f.byte >> i) & 1 for i in range(8)] + [0 if f.stop_low else 1]
             for i, b in enumerate(bits):
                 start = len(line); fill(edge + (i + 1) * bit, b)
-                if f.probe and 1 <= i <= 8:                            # value only near the nominal sample
+                if f.probe and 1 <= i <= 9:                            # value only near the nominal sample (data bits and stop bit)
                     centre = int(edge + (i + 0.5) * self.cpb)
                     for k in range(start, len(line)):
                         if abs(k - centre) > self.tol: line[k] = 1 - b
@@ -79,8 +90,10 @@ class UartRxRef:
         expectation: same count, same words in order, each cycle inside its window)."""
         errors = list(self.violations)
         if len(pushes) != len(self.expected):
-            errors.append("expected %d pushes %s, got %d: %s" % (
-                len(self.expected), ["0x%03X" % w for w, _, _ in self.expected], len(pushes),
+            n = len(self.expected)          # first push with no expectation, else the first missing one's earliest cycle
+            at = pushes[n][0] if len(pushes) > n else self.expected[len(pushes)][1]
+            errors.append("cycle %d: expected %d pushes %s, got %d: %s" % (
+                at, n, ["0x%03X" % w for w, _, _ in self.expected], len(pushes),
                 [(c, "0x%03X" % w) for c, w in pushes]))
         for n, ((cycle, word), (want, lo, hi)) in enumerate(zip(pushes, self.expected)):
             if word != want:

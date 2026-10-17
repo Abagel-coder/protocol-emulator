@@ -14,7 +14,7 @@ CASES = {
     "nominal":   [Frame(0x55), Frame(0x00), Frame(0xFF), Frame(0xAA, gap=0), Frame(0xA3, gap=0)],
     "slow_4pct": [Frame(0x55, baud_error=-0.04), Frame(0xC3, baud_error=-0.04, gap=0)],
     "fast_4pct": [Frame(0x55, baud_error=+0.04), Frame(0xC3, baud_error=+0.04, gap=0)],
-    "probe":     [Frame(0x55, probe=True), Frame(0xFF, probe=True, gap=0), Frame(0x00, probe=True), Frame(0x96, probe=True, gap=0)],
+    "probe":     [Frame(0x55, probe=True), Frame(0xFF, probe=True, gap=150), Frame(0x00, probe=True, gap=150), Frame(0x96, probe=True, gap=150)],
     "framing":   [Frame(0x12, stop_low=True), Frame(0x34)],
     "glitch":    [Frame(0, glitch=100), Frame(0x5A)],
     "long_idle": [Frame(0x01, gap=140_000), Frame(0x02)],   # 70,000 ticks: the 65,535-tick WAITP times out once and rearms
@@ -51,7 +51,10 @@ def test_uart_ref_probe_frame_is_complement_outside_window(byte):
     line = ref.line
     bounds = [int(10 + i * CPB) for i in range(11)]
     assert set(line[bounds[0]:bounds[1]]) == {0}                    # start bit untouched
-    assert set(line[bounds[9]:bounds[10]]) == {1}                   # stop bit untouched
+    centre = int(10 + 9.5 * CPB)                                    # the stop bit: high only near its sample instant
+    for k in range(bounds[9], bounds[10]):
+        assert line[k] == (1 if abs(k - centre) <= TOL else 0), (k, centre)
+    assert 0 in line[bounds[9]:bounds[10]] and 1 in line[bounds[9]:bounds[10]]
     v = byte & 1
     for i in range(8):
         centre = int(10 + (i + 1.5) * CPB)
@@ -59,6 +62,16 @@ def test_uart_ref_probe_frame_is_complement_outside_window(byte):
             want = v if abs(k - centre) <= TOL else 1 - v
             assert line[k] == want, (i, k, centre)
     assert ref.expected == [(byte, int(10 + 9.5 * CPB) - TOL, int(10 + 9.5 * CPB) + TOL + PUSH_SLACK)]
+
+
+def test_uart_ref_probe_frame_needs_a_gap_after_it():
+    ref = UartRxRef(CLK_HZ, BAUD)
+    with pytest.raises(ValueError, match="gap of at least bit/4"):
+        ref.schedule([Frame(0x55, probe=True), Frame(0xFF, gap=0)])
+    with pytest.raises(ValueError):
+        ref.schedule([Frame(0x55, probe=True), Frame(0xFF, gap=int(CPB) // 4 - 1)])
+    ref.schedule([Frame(0x55, probe=True), Frame(0xFF, gap=int(CPB) // 4)])
+    ref.schedule([Frame(0x55, probe=True), Frame(0xFF)])            # the default gap (2 bits) is fine
 
 
 def test_uart_ref_options_shape():
@@ -109,3 +122,32 @@ def test_uart_rx_firmware_matches_reference(name):
 def test_uart_rx_sentinel_mutant_is_rejected():
     src = (FIRMWARE / "uart_rx.s").read_text(); assert MUTANT_BIT[0] in src
     errors, _ = run_case(CASES["probe"], src.replace(*MUTANT_BIT, 1)); assert errors, "the probe frames did not reject a 3 % fast BIT"
+
+
+# ---- regression: a start bit that lands while the timed-out start wait rearms ----------------
+
+REARM_OLD = ("""frame:
+  WAITP UI, 0, HIGH, R0   ; idle line first (also waits out a break after a framing error); timeout rearms
+  BTO  frame
+  NOP
+start:
+  WAITP UI, 0, LOW, R0    ; the start bit: a level wait, so an edge that lands while the timed-out wait rearms is still caught
+  BTO  start
+  SETT R1, HALF           ; delay slot: R1 = middle of the start bit (harmless when rearming)
+""", """frame:
+  WAITP UI, 0, FALL, R0   ; start edge; the 65,535-tick timeout just rearms the wait
+  BTO  frame
+  SETT R1, HALF           ; delay slot: R1 = middle of the start bit (harmless when rearming)
+""")
+
+@pytest.mark.parametrize("gap", [130_870, 130_871, 130_872, 130_873])
+def test_uart_rx_start_during_rearm(gap):
+    """The first start wait times out after 65,535 ticks (131,070 cycles) and rearms; a start bit
+    landing in those few cycles must still be received (level waits catch it; an edge wait misses it)."""
+    errors, _ = run_case([Frame(0x01, gap=gap), Frame(0x02)]); assert errors == [], errors
+
+@pytest.mark.parametrize("gap", [130_871, 130_872])
+def test_uart_rx_rearm_regression_fails_on_the_edge_wait_firmware(gap):
+    """Guard for the regression test above: the old FALL-wait text must fail it."""
+    src = (FIRMWARE / "uart_rx.s").read_text(); assert src.count(REARM_OLD[0]) == 1
+    errors, _ = run_case([Frame(0x01, gap=gap), Frame(0x02)], src.replace(*REARM_OLD, 1)); assert errors

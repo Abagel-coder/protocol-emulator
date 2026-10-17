@@ -2,15 +2,20 @@
 ; low, OE clear releases). Commands from the host FIFO: {READ[10], STOP[9], START[8], data[7:0]}
 ; (for a read, data bit 0 = 1 answers the byte with NACK). One result per command:
 ; {STRETCHED[10], TIMEOUT[9], NACK[8], data[7:0]}. Computed for 50 MHz; the quarter-period grid
-; below gives tLOW = tHIGH = 2Q = 5.12 us, tSU;STA = tHD;STA = tSU;STO = tBUF = 2Q, tHD;DAT = tSU;DAT = Q.
+; below gives tLOW = tHIGH = 2Q, tSU;STA = tHD;STA = tSU;STO = tBUF = 2Q, tHD;DAT = tSU;DAT = Q.
+; Measured period 4Q + 12 = 524 cycles = 10.48 us (95.4 kHz), not 4Q: the grid re-anchors at the
+; observed SCL rise, about 12 cycles after the release deadline (pin write, input synchroniser,
+; WAITP), so tHIGH = 2Q + 10 and tLOW = 2Q + 2.
 .equ PRESCALE 0       ; one tick = one cycle
-.equ Q        128     ; quarter of the SCL period in ticks = ceil(50e6 / 100e3 / 4) + 3 (period 10.24 us, under 100 kHz)
+.equ Q        128     ; quarter of the SCL period in ticks = ceil(50e6 / 100e3 / 4) + 3 (measured period 10.48 us, under 100 kHz)
 main:
   WAITF RXV, R0
   BTO  main
   NOP
   POP  R2             ; command
   SETT R1, 0          ; the quarter-period grid starts now
+  LDI  R3, 0xFF
+  AND  R3, R2         ; R3 = the command's data byte, before anything can abort (an abort in START reports it)
   LDI  R6, 0          ; status bits
   LDI  R4, 0x00
   LDIH R4, 0x01       ; START

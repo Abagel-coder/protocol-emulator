@@ -7,14 +7,26 @@ and 1 = SCL) and its own, and returns the bus levels as the chip's uio_in (other
 Standard-mode limits checked on the bus, in cycles from clk_hz (never from the firmware):
   period (rise to rise) >= 10.0 us; tLOW >= 4.7 us; tHIGH >= 4.0 us; tSU;STA >= 4.7 us (SDA and SCL
   both high before SDA falls); tHD;STA >= 4.0 us (SDA low before SCL falls); tSU;DAT >= 250 ns;
-  tHD;DAT <= 3.45 us within a byte (the master may hold SCL low for longer between commands, which
-  is master-side stretching and exempt); tSU;STO >= 4.0 us; tBUF >= 4.7 us; any other SDA change
-  while SCL is high is a violation.
+  tHD;DAT <= 3.45 us (except the master's first SDA change after an ACK bit: between commands it
+  holds SCL low for as long as its host takes, which is master-side stretching, and while the slave
+  stretches; UM10204 applies the maximum only to an unstretched low period); tSU;STO >= 4.0 us;
+  tBUF >= 4.7 us; any other SDA change while SCL is high is a violation. Open drain: a master
+  line driven high (uio_oe & uio_out, bits 0-1) is a violation.
 Slave: ACKs its own address (either direction), NACKs others; stores written bytes; serves
-read_data on reads, changing SDA T_SLAVE = 5 cycles after SCL falls, and stops after the master's
-NACK; nack_data_after = n NACKs the n-th written data byte; stretch_after_byte = (k, cycles) holds
-SCL low for `cycles` after the ACK bit of byte k (0 = the address byte) -- longer than the master's
-65,535-tick timeout is the timeout case; the slave then lets go and keeps listening for a START.
+read_data on reads and stops after the master's NACK; nack_data_after = n NACKs the n-th written
+data byte; stretch_after_byte = (k, cycles) holds SCL low for `cycles` after the ACK bit of byte k
+(0 = the address byte) -- longer than the master's 65,535-tick timeout is the timeout case; the
+slave then lets go and keeps listening for a START.
+Sampling-instant check (the I2C counterpart of the SPI model's MISO window): every bit the slave
+transmits (read data, and its ACK or NACK of a byte written to it) is the complement from the
+cycle SCL falls (T_SLAVE = 0, a legal hold time of 0) and the real level only from tVD;DAT =
+3.45 us after the fall (172 cycles at 50 MHz, the latest UM10204 allows), or, while the slave
+stretches, only from tSU;DAT before it lets SCL go if that is later (UM10204 Table 10: with SCL
+stretched the data must be valid by the set-up time before the release). The real level then stays
+until the next fall. So a master that samples SDA after the fall, or in the low phase before the
+real level is due, reads the wrong bit; one that samples while SCL is high reads the right one. The
+slave's own tSU;DAT stays legal: 172 cycles into a low period of at least tLOW = 235 leaves 63 (86
+against the firmware's measured 258), and the stretched case leaves exactly tSU;DAT (13).
 
 Conventions this implementation fixes (all from the bus definition, none from a firmware):
   - cycles are counted from the model's first step; a level change "at cycle k" is the first step
@@ -32,10 +44,10 @@ Conventions this implementation fixes (all from the bus definition, none from a 
   - tSU;DAT: an SDA change on the bus while SCL is low (from the cycle SCL falls) must precede the
     next SCL rise by tSU;DAT; a change in the very cycle SCL rises has a setup of 0.
   - tHD;DAT: judged on the master's own SDA pull-down (the model sees it apart from the slave's),
-    from the last SCL fall to the change, only when the change prepares bits 2-9 of a byte (1 to 8
-    bits of the current byte already clocked). The change that sets up the first bit of a byte
-    (after a START or after the previous byte's ACK) is exempt: between commands the master holds
-    SCL low for as long as its host takes.
+    from the last SCL fall to every change while SCL is low, including the first bit after a
+    START. Exempt: the master's first change after an ACK bit (a command boundary: the next byte's
+    first bit, a STOP's SDA low or a repeated START's SDA release), and any change while the slave
+    holds SCL low (e.g. the master's abort releasing SDA during a long stretch).
   - START and STOP are recognised only between bytes (no bit of the current byte clocked yet; the
     SCL pulse they occur in is not a data bit) or before the first START. An SDA change while SCL
     is high in bits 1-9 of a byte is a violation and is otherwise ignored (the bit keeps the level
@@ -46,12 +58,20 @@ Conventions this implementation fixes (all from the bus definition, none from a 
   - stretch_after_byte = (k, cycles): byte k of a transaction, counted from its START (0 = the
     address byte); it fires once, the first time that byte's ACK bit ends. The slave pulls SCL low
     in the cycle SCL falls at the end of that ACK bit and releases it `cycles` cycles later.
-  - the slave's SDA changes happen T_SLAVE cycles after SCL falls: the ACK pull-down after the
-    eighth bit, its release after the ninth; on a read, each data bit (the first one after the
-    address ACK or the master's ACK of the previous byte) and the release for the master's ACK
-    after the eighth. read_data beyond its end is served as 0xFF (SDA released). After the
+    measured["scl_release_lag"] lists (release cycle, cycles until SCL rose on the bus) for every
+    release (None if SCL never rose before finish()), so a test can check that the master had let
+    go of SCL by then (after its own release, or after aborting on a timeout).
+  - the slave's SDA changes happen T_SLAVE = 0 cycles after SCL falls (in the fall's own cycle):
+    the ACK or a data byte's NACK after the eighth bit (complement first, see the sampling-instant
+    check), its release after the ninth; on a read, each data bit (the first one after the address
+    ACK or the master's ACK of the previous byte; complement first) and the release for the
+    master's ACK after the eighth. Another device's address gets no response (SDA left released,
+    no complement). read_data beyond its end is served as 0xFF (SDA released). After the
     master's NACK of a read byte, or a NACK of the address, the slave ignores the bus until the
     next START. A START or STOP cancels the slave's pending SDA changes.
+  - open drain: the violation "SDA/SCL driven high (open-drain contract)" is recorded once in
+    each cycle a master line becomes driven high (uio_oe & uio_out); the bus still treats such a
+    line as released (the wired-AND takes only pull-downs).
   - finish(stop_expected=True), called once after the last step, records a violation for a byte
     half-received and, unless stop_expected is False, for a transaction still open (no STOP).
   - events: ("START", k), ("STOP", k), ("BYTE", k, value, acked, "W"|"R") at the SCL fall that
@@ -61,11 +81,12 @@ Conventions this implementation fixes (all from the bus definition, none from a 
 import math
 from fractions import Fraction
 
-T_SLAVE = 5                       # slave SDA changes, cycles after SCL falls
+T_SLAVE = 0                       # the slave's SDA changes, cycles after SCL falls (tHD;DAT 0 is legal)
 
 MIN_NS = {"period": 10_000, "tLOW": 4_700, "tHIGH": 4_000, "tSU;STA": 4_700, "tHD;STA": 4_000,
           "tSU;DAT": 250, "tSU;STO": 4_000, "tBUF": 4_700}
 MAX_NS = {"tHD;DAT": 3_450}
+T_VD_NS = 3_450                   # tVD;DAT: a transmitter's data is valid at the latest this long after SCL falls
 
 
 class I2cSlaveRef:
@@ -76,9 +97,10 @@ class I2cSlaveRef:
         cyc = lambda ns: Fraction(ns) * clk_hz / 10**9
         self.min = {n: math.ceil(cyc(ns)) for n, ns in MIN_NS.items()}
         self.max = {n: math.floor(cyc(ns)) for n, ns in MAX_NS.items()}
+        self.t_vd_max = math.floor(cyc(T_VD_NS))   # 172 at 50 MHz
         self.k = 0
         self.violations, self.written, self.events = [], [], []
-        self.measured = {n: [] for n in list(MIN_NS) + list(MAX_NS)}
+        self.measured = {n: [] for n in list(MIN_NS) + list(MAX_NS) + ["scl_release_lag"]}
         self.scl = self.sda = 1           # bus levels in the previous step (idle high)
         self.m_sda = 0                    # the master's SDA pull-down in the previous step
         self.s_sda = self.s_scl = 0       # the slave's pull-downs
@@ -92,6 +114,10 @@ class I2cSlaveRef:
         self.bits = 0; self.shift = 0; self.sample = 1; self.value = 0
         self.byte_index = 0; self.n_data = 0; self.n_read = 0
         self.ack_given = False; self.stretch_done = False
+        self.stretch_release = None       # cycle the slave lets SCL go (while it stretches)
+        self.released_at = None           # the slave let SCL go here and SCL has not risen since
+        self.after_ack = False            # the master's next SDA change is its first after an ACK bit
+        self.m_high = 0                   # master lines driven high in the previous step
 
     # ---- helpers ----------------------------------------------------------------------------
     def _v(self, what):
@@ -108,17 +134,40 @@ class I2cSlaveRef:
     def _read_byte(self):
         return self.read_data[self.n_read] if self.n_read < len(self.read_data) else 0xFF
 
-    def _drive_read_bit(self, i):         # i = 7 (MSB) .. 0, T_SLAVE after this fall
-        self._sda_at(self.k + T_SLAVE, 1 - ((self._read_byte() >> i) & 1))
-
-    # ---- one cycle --------------------------------------------------------------------------
-    def step(self, uo, uio_out, uio_oe):
-        k = self.k
+    def _apply_due(self, k):
+        """Apply the slave's pending changes due by cycle k (pull-downs: 1 = pull low)."""
         due = [a for a in self.actions if a[0] <= k]
         self.actions = [a for a in self.actions if a[0] > k]
         for _, line, pull in due:
             if line == "sda": self.s_sda = pull
-            else: self.s_scl = pull
+            else:
+                self.s_scl = pull
+                if not pull: self.stretch_release, self.released_at = None, k
+        return bool(due)
+
+    def _drive(self, k, pull):
+        """The slave transmits a bit (a read data bit, or its ACK/NACK of a byte written to it) for
+        the SCL pulse after the fall at k: the complement from k + T_SLAVE, the real level from
+        k + t_vd_max (UM10204 tVD;DAT, the latest a transmitter may set its data), or, while the
+        slave stretches, from tSU;DAT before it lets SCL go if that is later (UM10204 Table 10:
+        with SCL stretched the data need only be valid by the set-up time before the release)."""
+        real = k + self.t_vd_max
+        if self.stretch_release is not None:
+            real = max(real, self.stretch_release - self.min["tSU;DAT"])
+        self._sda_at(k + T_SLAVE, 1 - pull)
+        self._sda_at(real, pull)
+
+    def _drive_read_bit(self, i):         # i = 7 (MSB) .. 0, for the pulse after this fall
+        self._drive(self.k, 1 - ((self._read_byte() >> i) & 1))
+
+    # ---- one cycle --------------------------------------------------------------------------
+    def step(self, uo, uio_out, uio_oe):
+        k = self.k
+        self._apply_due(k)
+        high = uio_oe & uio_out & 0x03
+        if high and not self.m_high:
+            self._v("SDA/SCL driven high (open-drain contract)")
+        self.m_high = high
         md = uio_oe & ~uio_out & 0x03
         m_sda, m_scl = md & 1, (md >> 1) & 1
         sda = 0 if (m_sda or self.s_sda) else 1
@@ -137,6 +186,9 @@ class I2cSlaveRef:
         self.sda = sda
 
         if scl and not self.scl:                               # SCL rises
+            if self.released_at is not None:
+                self.measured["scl_release_lag"].append((self.released_at, k - self.released_at))
+                self.released_at = None
             if self.fall is not None: self._min("tLOW", k - self.fall)
             if self.rise is not None: self._min("period", k - self.rise)
             if self.sda_change is not None and self.fall is not None and self.sda_change >= self.fall:
@@ -150,8 +202,18 @@ class I2cSlaveRef:
                 self._commit(k)
             self.cond, self.start_at = False, None
         self.scl = scl
+        if self._apply_due(k):                                 # changes the fall just scheduled (T_SLAVE = 0):
+            sda = 0 if (m_sda or self.s_sda) else 1            # on the bus in the fall's own cycle, SCL low
+            if sda != self.sda:
+                self.sda_change = k
+                if sda: self.sda_rise = k
+            self.sda = sda
 
-        if m_sda != self.m_sda and not scl and self.state != "idle" and 1 <= self.bits <= 8:
+        if m_sda != self.m_sda and not scl and self.state != "idle" and self.s_scl:
+            pass                                               # SCL stretched by the slave: exempt
+        elif m_sda != self.m_sda and not scl and self.state != "idle" and self.bits == 0 and self.after_ack:
+            self.after_ack = False                             # the first change after an ACK: exempt
+        elif m_sda != self.m_sda and not scl and self.state != "idle" and self.bits <= 8:
             hold = k - self.fall
             self.measured["tHD;DAT"].append((k, hold))
             if hold > self.max["tHD;DAT"]:
@@ -166,6 +228,8 @@ class I2cSlaveRef:
         (a START with no STOP) when the caller expected the master to have sent its STOP."""
         if self.state != "idle" and self.bits != 0:
             self._v("run ended in bit %d of a byte" % (self.bits + 1))
+        if self.released_at is not None:
+            self.measured["scl_release_lag"].append((self.released_at, None))
         if stop_expected and self.state != "idle":
             starts = [e[1] for e in self.events if e[0] == "START"]
             self._v("run ended with the transaction from the START at cycle %d still open (no STOP)" % starts[-1])
@@ -181,6 +245,7 @@ class I2cSlaveRef:
         self.events.append(("START", k))
         self.last_cond, self.start_at, self.cond = "START", k, True
         self.state, self.bits, self.shift, self.byte_index = "addr", 0, 0, 0
+        self.after_ack = False
         self.actions = [a for a in self.actions if a[1] != "sda"]; self.s_sda = 0
 
     def _stop(self, k):
@@ -194,6 +259,7 @@ class I2cSlaveRef:
         """SCL fell at the end of a data/ACK pulse: the bit sampled at its rise is clocked."""
         self.bits += 1
         b = self.sample
+        self.after_ack = self.bits == 9
         if self.bits <= 8:
             self.shift = ((self.shift << 1) | b) & 0xFF
         st = self.state
@@ -209,9 +275,11 @@ class I2cSlaveRef:
             else:
                 self.ack_given = False
             if st in ("addr", "write") and self.ack_given:
-                self._sda_at(k + T_SLAVE, 1)                   # ACK
+                self._drive(k, 1)                              # ACK
+            elif st == "write":
+                self._drive(k, 0)                              # NACK of a data byte written to us
             else:
-                self._sda_at(k + T_SLAVE, 0)                   # release (NACK, or the master's ACK slot)
+                self._sda_at(k + T_SLAVE, 0)                   # release (another device's address, or the master's ACK slot)
         else:                                                  # the ninth (ACK) bit
             acked = b == 0
             if st in ("addr", "write", "read"):
@@ -223,10 +291,11 @@ class I2cSlaveRef:
             elif st == "read":
                 self.n_read += 1
                 self.state = "read" if acked else "ignore"
-            if self.state == "read":
-                self._drive_read_bit(7)
             sab = self.stretch_after_byte
             if sab is not None and not self.stretch_done and self.byte_index == sab[0] and st != "ignore":
                 self.stretch_done = True; self.s_scl = 1
+                self.stretch_release = k + sab[1]
                 self.actions.append((k + sab[1], "scl", 0))
+            if self.state == "read":
+                self._drive_read_bit(7)
             self.byte_index += 1; self.bits = 0; self.shift = 0

@@ -50,7 +50,7 @@ assumed".
   T1_deadline_exact was `adv == (t_in == rt_v)`): whenever the core is `active` on a `WAITT`,
   `adv == ((T - Rn) mod 2^16 < 32768)`. `WAITT`, `T - Rn` and `Rn` are taken from the instruction
   word's own bits and the register file (formal-only wires `f_is_waitt`, `f_diff`, `f_rn`), not from
-  the RTL's decode or its `waitt_diff`/`waitt_done` wires. The lemmas below make the timing
+  the RTL's decode or its `waitt_ok`/`waitt_done` wires. The lemmas below make the timing
   contract explicit:
   - **T1c_release_exact_after_stall** (two-cycle, independent): a `WAITT` that stalled in the
     previous cycle and completes now, decoding the same instruction word, does so with `T == Rn`.
@@ -430,13 +430,28 @@ mutants (no brief mutant touches the flags) that prove T1f and the flag tests de
 | # | Mutation | Properties that fail | Directed tests that fail |
 |---|---|---|---|
 | W1 | `waitt_done = (t_in == rt_v)` (v0's equality rule) | T1, T1e (step 3); the late-release cover becomes unreachable | `waitt_late_deadline_completes_in_one_cycle`, `waitt_boundary_32768_ahead_waits_exactly`, `waitt_leaves_to_unchanged`; host `run_low_across_deadline_resumes_immediately` (no release within 20 edges of RUN's return); the fuzzer (program 1, cycle 136) |
-| W2 | `waitt_done = waitt_diff[15]` (inverted sign) | T1, T1d, T1e (steps 3-4), T1c (step 5) | the same three; host `run_low_across_...` (released before RUN was ever dropped); the fuzzer (program 1, cycle 17) |
-| W3 | `waitt_done = !waitt_diff[14]` (window on bit 14) | T1, T1e (step 4), T1c (step 5) | `waitt_late_...` (32,767 behind stalls), `waitt_boundary_...` (32,768 ahead released at once); the fuzzer passes (bit 14 and bit 15 of `T - Rn` disagree only for deadlines 16,384..32,767 ticks behind or 16,385..32,768 ahead, which its programs do not produce) |
+| W2 | inverted sign: `waitt_done = waitt_diff[15]` in core v0.1 (today `waitt_ok[k] = d[15]` in `g_wok`; see F2 below) | T1, T1d, T1e (steps 3-4), T1c (step 5) | the same three; host `run_low_across_...` (released before RUN was ever dropped); the fuzzer (program 1, cycle 17) |
+| W3 | window on bit 14: `waitt_done = !waitt_diff[14]` in core v0.1 (today `waitt_ok[k] = !d[14]` in `g_wok`) | T1, T1e (step 4), T1c (step 5) | `waitt_late_...` (32,767 behind stalls), `waitt_boundary_...` (32,768 ahead released at once); the fuzzer passes (bit 14 and bit 15 of `T - Rn` disagree only for deadlines 16,384..32,767 ticks behind or 16,385..32,768 ahead, which its programs do not produce) |
 | W4 | `timed_to = wait_active ? (t_in == wdead) : (tmo == 16'd1)` | T4c only (step 1) | none directed; the differential fuzzer |
 | W5 | `wdead <= t_in` (timeout dropped) | P4 only (step 4) | `waitp_timeout_and_release`, `r0_timeout_is_65535_ticks`, `waitt_leaves_to_unchanged`; the fuzzer |
 | W6a | a completing `WAITT` clears `TO` | T1f only (step 5) | `waitt_leaves_to_unchanged` (and the oracle's `test_waitt_leaves_to_unchanged` against the same change in `tools/sim.py`) |
 | W6b | a late `WAITT` sets `TO` (the declined miss flag) | T1f only (step 4) | the same |
 | S-W1 | `tools/sim.py`: v0's equality rule in the oracle | -- | pytest: `test_waitt_late_deadline_completes_in_one_cycle`, `test_waitt_boundary_32768_ahead_waits_exactly`, `test_waitt_leaves_to_unchanged`; the fuzzer against the real RTL (program 1, cycle 136) |
+
+**Fetch-loop timing (precomputed `WAITT` compare and zero test, 2026-10-16).** `waitt_diff` is gone:
+`waitt_ok[k] = !((T - Rk)[15])` and `reg_zero[k] = (Rk == 0)` are computed for every register
+(generate blocks `g_wok`, `g_rz`; R0 reads as 0, so `waitt_ok[0] = !T[15]` and `reg_zero[0] = 0`)
+and only selected by `w_rt` (`waitt_done = waitt_ok[w_rt]`, first-cycle `timed_to = reg_zero[w_rt]`),
+taking the 16-bit subtract off the instruction-word -> `adv` path. Behaviour is unchanged and every
+property proves as before. Mutants in a scratch copy, `bmc` (first failing step) plus the core suite:
+
+| # | Mutation | Properties that fail | Directed tests / fuzzer that fail |
+|---|---|---|---|
+| F1 | `waitt_ok[0] = t_in[15]` (R0 sign inverted) | T1, T1d, T1e (step 3) | the fuzzer only (program 89: R3) |
+| F2 | `d = regs[gk] - t_in` (operands swapped) | T1, T1e (steps 3-4), T1c (step 5) | `waitt_late_deadline_...`, `waitt_boundary_32768_...`, `waitt_leaves_to_unchanged`, `waitt_stall_across_T_wrap_...`; the fuzzer (program 1, cycle 17) |
+| F3 | `reg_zero[0] = 1` (R0 timeout read as 0) | T4c (step 1) | `waitp_timeout_and_release`, `r0_timeout_is_65535_ticks`, `host_fifo_push_pop`; the fuzzer passes |
+| F4 | `waitt_done = waitt_ok[f_rd]` (wrong field selects) | T1, T1e (step 4) | `waitt_period_holds_across_T_wraparound`, `waitt_boundary_32768_...`, `waitt_stall_across_T_wrap_...`; the fuzzer (program 1, cycle 17) |
+| F5 | `reg_zero[gk] = (regs[gk] == 1)` | T4c (step 1) | `zero_timeout_completes_in_first_cycle` (WAITF); the fuzzer (program 9: R1) |
 
 ## Cover witnesses
 

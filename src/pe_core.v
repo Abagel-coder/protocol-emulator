@@ -92,15 +92,31 @@ module pe_core (
   // i.e. Rn is not ahead of T: a deadline up to 32,768 ticks ahead releases exactly at T == Rn (T
   // moves at most one tick per cycle and Rn cannot change while stalled), one already passed (up to
   // 32,767 ticks behind) releases at once.
-  wire [15:0] waitt_diff = t_in - rt_v;              // only bit 15 (the sign of T - Rn) is used; 14:0 go to _unused
-  wire        waitt_done = !waitt_diff[15];
+  // Timing: the compare is computed for every register from registered values (t_in, regs) and only
+  // SELECTED by the instruction's rt field, so the 16-bit subtract is not on the A_DOUT -> adv path
+  // (docs/superpowers/specs/2026-10-16-fetch-loop-timing-design.md). R0 reads as 0.
+  wire [7:0] waitt_ok;
+  assign waitt_ok[0] = !t_in[15];
+  genvar gk;
+  generate for (gk = 1; gk < 8; gk = gk + 1) begin : g_wok
+    wire [15:0] d = t_in - regs[gk];
+    assign waitt_ok[gk] = !d[15];
+    wire _unused_d = &{d[14:0], 1'b0};
+  end endgenerate
+  wire        waitt_done = waitt_ok[w_rt];
+  // Zero test per register for the first-cycle timeout rule (tmo == 0; R0 means 65535, never 0).
+  wire [7:0] reg_zero;
+  assign reg_zero[0] = 1'b0;
+  generate for (gk = 1; gk < 8; gk = gk + 1) begin : g_rz
+    assign reg_zero[gk] = (regs[gk] == 16'd0);
+  end endgenerate
   wire        delay_done = wait_active ? (dcnt == 9'd0) : (w_imm9 == 9'd0);
   wire        timed_cond = (w_sub == `ISA_WAIT_WAITP) ? cond_met :
                            (w_sub == `ISA_WAIT_WAITF) ? flag_v : 1'b1;   // WAITL: no lanes in v0
   // Timed waits keep the equality compare against the deadline wdead = T + timeout captured when the
   // wait starts. In the first cycle T == T + tmo exactly when tmo == 0, so the adder sits only on the
   // wdead capture path, not in front of the compare on the adv -> next_pc path.
-  wire        timed_to   = wait_active ? (t_in == wdead) : (tmo == 16'd0);
+  wire        timed_to   = wait_active ? (t_in == wdead) : reg_zero[w_rt];
   wire        is_timed   = is_wait && (w_sub != `ISA_WAIT_WAITT) && (w_sub != `ISA_WAIT_DELAY);
   wire        wait_done  = (w_sub == `ISA_WAIT_WAITT) ? waitt_done :
                            (w_sub == `ISA_WAIT_DELAY) ? delay_done : (timed_cond || timed_to);
@@ -163,7 +179,7 @@ module pe_core (
   assign c2h_data = rd_v;
   wire [15:0] in_v = (ir[8:7] == `ISA_BANKI_UI) ? {8'd0, ui_eff} : (ir[8:7] == `ISA_BANKI_UIO) ? {8'd0, uio_sync} :
                      (ir[8:7] == `ISA_BANKI_UOR) ? {9'd0, uo_rb} : {8'd0, uio_rb};
-  wire _unused = &{ui_sync[7:4], ui_prev[7:4], waitt_diff[14:0], 1'b0};
+  wire _unused = &{ui_sync[7:4], ui_prev[7:4], 1'b0};
   wire [15:0] ldi_v  = ir[8] ? {ir[7:0], rd_v[7:0]} : {8'd0, ir[7:0]};
   wire [15:0] time_v = (ir[8] == `ISA_TIME_SETT) ? (t_in + {8'd0, ir[7:0]}) : (rd_v + {8'd0, ir[7:0]});
 
@@ -218,7 +234,7 @@ module pe_core (
   // Formal-only views of a WAITT, taken from the instruction word's own
   // bits (isa.yaml layouts.WAIT: class [15:12], sub [11:9], rn [8:6]) and the
   // register file -- not from the RTL's decode wires (is_wait, w_sub, rt_v)
-  // or its wait-unit wires (waitt_diff, waitt_done) -- so the WAITT
+  // or its wait-unit wires (waitt_ok, waitt_done) -- so the WAITT
   // properties below see a wrong decode or a wrong compare instead of
   // restating it. f_diff is T - Rn mod 2^16; the ISA's rule (isa.yaml
   // semantics.waits, core v0.1) is "complete once it is below 32768".
@@ -261,7 +277,8 @@ module pe_core (
   end
 
   // T1b (spec-pinning restatement, stated on the *port* bits): rt_v -- the
-  // Rn of the RTL's own WAITT compare (waitt_diff) -- is the register selected by
+  // Rn behind the RTL's wdead capture (tmo); the WAITT compare itself selects
+  // the precomputed waitt_ok[w_rt], which T1/T1e pin on the port bits -- is the register selected by
   // imem_data[8:6] (the ISA's WAIT.rn/rt field, isa/isa.yaml layouts.WAIT),
   // R0 reading as zero. It deliberately names imem_data[8:6] rather than the
   // internal w_rt wire: an earlier version restated rt_v in terms of w_rt
@@ -370,7 +387,7 @@ module pe_core (
       assert(adv);
 
   // T4c_timed_to_equiv (core v0.1; equivalence of the simplified timeout
-  // completion): timed_to, now wait_active ? (t_in == wdead) : (tmo == 0)
+  // completion): timed_to, now wait_active ? (t_in == wdead) : reg_zero[w_rt] (tmo == 0)
   // with the adder only on the wdead capture path, equals v0's
   // t_in == (wait_active ? wdead : t_in + timeout) in every state -- the
   // timeout taken from the port bits with the R0 -> 65535 rule, as in P4,

@@ -18,6 +18,8 @@
   "//": "CLOCK_PERIOD - Increase this in case you are getting setup time violations.",
   "//": "The value is in nanoseconds, so 20ns == 50MHz.",
   "CLOCK_PERIOD": 20,
+  "//": "EXPERIMENT exp-synth-delay4: delay-oriented ABC script; see .superpowers/sdd/progress.md 2026-10-16",
+  "SYNTH_STRATEGY": "DELAY 4",
 
   "//": "Hold slack margin - Increase them in case you are getting hold violations.",
   "PL_RESIZER_HOLD_SLACK_MARGIN": 0.1,

@@ -4,7 +4,7 @@
 .equ PRESCALE 0       ; one tick = one cycle
 .equ HALF     25      ; ticks per SCK half period = 50e6 / 1e6 / 2
 .equ CSLEAD   25      ; CS_n low -> first half-step (>= HALF): CPHA=1's first edge; CPHA=0 sets MOSI up there, first edge HALF later
-.equ CSLAG    25      ; last SCK edge -> CS_n high   (>= HALF)
+.equ CSLAG    25      ; last SCK edge -> CS_n high for CPHA=0; CPHA=1 adds a half period (the byte's deadline is already past its last edge); >= HALF
 .equ CSIDLE   25      ; CS_n high between transactions
   SET  UO, 0x08       ; CS_n idle high (uo resets to 0)
   LDI  R6, 0x02       ; MISO mask (ui[1])
@@ -62,7 +62,9 @@ mosi:
   WAITT R1
   TGL  UO, 0x02       ; CPHA = 0: trailing edge of the last bit, back to idle
 pushr:
-  WAITF TXE, R0
+  WAITF TXE, R0       ; retry on timeout: a full FIFO never drops the result
+  BTO  pushr
+  NOP
   PUSH R3
   LDIH R4, 0x01       ; LAST mask (low byte of R4 is 0)
   BITT R7, R4

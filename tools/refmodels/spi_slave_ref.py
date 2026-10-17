@@ -9,13 +9,16 @@ Tolerances (from the nominal period P = clk_hz / sck_hz, H = P // 2; never from 
     once -- the switch to the next transaction's CPOL -- and it must equal the transaction's CPOL at
     CS_n's fall, between the bytes of the transaction and at CS_n's rise;
   - first edge >= H - 2 cycles after CS_n falls and in the leading direction; last edge >= H - 2 before CS_n rises;
+  - CS_n stays high >= H - 2 cycles between a rise and the next fall;
   - edge-to-edge within a byte: H +- 1 cycles; between bytes >= H - 1 with SCK idle;
   - MOSI unchanged from P // 4 cycles before each sampling edge to P // 4 after it;
-  - a transaction holds a multiple of 16 edges.
+  - a transaction holds a multiple of 16 edges, at least 16 (finish() flags one with no edges), and
+    CS_n rises before the run ends (finish() flags a transaction still open).
 MISO: each bit valid t_co cycles after its shifting edge (CPHA=0: the first bit t_co after CS_n
 falls) and held to the next shifting edge; with miso_window = w the bit is valid only within +-w
-cycles of the predicted sampling edge (previous edge + H) and the complement elsewhere -- the first
-bit of a CPHA=0 transaction is driven plainly.
+cycles of the predicted sampling edge (previous edge + H) and the complement elsewhere -- except the
+first bit of a CPHA=0 byte, whose window is one-sided: driven plainly until its actual sampling edge
++ w, then the complement.
 
 Conventions this implementation fixes (all from the protocol, none from a firmware):
   - cycles are counted from the model's first step; an edge "at cycle k" is the first step that
@@ -26,15 +29,17 @@ Conventions this implementation fixes (all from the protocol, none from a firmwa
     leading one, so the direction rule is enforced by the CS_n-fall level check.
   - `mode` is an int (every transaction) or a list (transaction j is judged against mode[j]; a
     transaction beyond the list's end is a violation and is judged against the list's last mode).
-  - MISO window and CPHA=0: the first bit of EVERY byte of a CPHA=0 transaction is driven plainly,
-    not only the transaction's first bit. Why: that bit's sampling edge is the byte's first edge,
-    which follows a stretch of idle SCK -- after CS_n's fall for the first byte, after a
-    between-byte gap for the others -- whose length the master (here, paced by its host) chooses
-    and the protocol does not fix. "Previous edge + H" would put the window at the wrong place and
-    a correct master that waits for its next byte would read the complement. The bit is still
-    checked: it is valid only from t_co after its shifting edge (CS_n's fall, or the previous
-    byte's last trailing edge) to the next shifting edge. Every other bit, and every bit of a CPHA=1
-    byte (whose first edge is the shifting edge, so its sampling edge is predictable), is windowed.
+  - MISO window and CPHA=0: the first bit of EVERY byte of a CPHA=0 transaction has a one-sided
+    window. Its sampling edge is the byte's first edge, which follows a stretch of idle SCK -- after
+    CS_n's fall for the first byte, after a between-byte gap for the others -- whose length the
+    master (here, paced by its host) chooses and the protocol does not fix. A slave cannot know when
+    that edge will come, so the LEADING side cannot be windowed ("previous edge + H" would put the
+    window at the wrong place and a correct master that waits for its next byte would read the
+    complement). The bit is driven plainly from t_co after its shifting event (CS_n's fall, or the
+    previous byte's last trailing edge) until the actual sampling edge + w, and is the complement from
+    there to the next shifting edge: a master that samples this bit late still reads the complement.
+    Every other bit, and every bit of a CPHA=1 byte (whose first edge is the shifting edge, so its
+    sampling edge is predictable), has the two-sided window.
   - before a bit is valid MISO holds its previous level; while CS_n is high and before a CPHA=1
     transaction's first shifting edge it is high (idle). A byte whose bits run out of miso_bytes is
     driven as 0xFF.
@@ -59,7 +64,9 @@ class SpiSlaveRef:
         self.holds = []                  # sampling-edge cycles whose MOSI hold window is still open
         self.tx = None                   # the open transaction's state (dict), None while CS_n is high
         self.miso = 1                    # MISO level returned this cycle
-        self.drive = None                # (bit, valid_from, predicted sampling edge or None)
+        self.drive = None                # (bit, valid_from, window centre or None, one_sided)
+        self.last_rise = None            # cycle of the last CS_n rise
+        self.finished = False
 
     # ---- helpers ----------------------------------------------------------------------------
     def _v(self, what):
@@ -77,10 +84,24 @@ class SpiSlaveRef:
         n = len(self.miso_expected)
         return self.miso_bytes[n] if n < len(self.miso_bytes) else 0xFF
 
-    def _shift_out(self, bit_index, valid_from, predicted):
-        """Start driving bit `bit_index` (7 = MSB) of the next MISO byte."""
+    def _shift_out(self, bit_index, valid_from, predicted, one_sided=False):
+        """Start driving bit `bit_index` (7 = MSB) of the next MISO byte. predicted None: plain;
+        one_sided: plain until the window centre is known (the actual sampling edge) and valid only up
+        to centre + w."""
         b = (self._miso_byte() >> bit_index) & 1
-        self.drive = (b, valid_from, predicted)
+        self.drive = (b, valid_from, predicted, one_sided)
+
+    def finish(self):
+        """Call once at the end of the run: flag a transaction still open and one with no edges."""
+        if self.finished:
+            return self.violations
+        self.finished = True
+        if self.transactions and self.transactions[-1]["cs_rise"] is None:
+            self._v("transaction still open at the end of the run (CS_n never rose)")
+        for t in self.transactions:
+            if t["edges"] == 0:
+                self.violations.append("cycle %d: transaction with no SCK edges" % t["cs_fall"])
+        return self.violations
 
     # ---- one cycle --------------------------------------------------------------------------
     def step(self, uo, uio_out, uio_oe):
@@ -108,19 +129,21 @@ class SpiSlaveRef:
             j = len(self.transactions)
             m = self._mode_of(j)
             cpol, cpha = m >> 1, m & 1
+            if self.last_rise is not None and k - self.last_rise < self.H - 2:
+                self._v("CS_n low again %d cycles after it rose (idle >= %d)" % (k - self.last_rise, self.H - 2))
             self.tx = {"cpol": cpol, "cpha": cpha, "n": 0, "last": None, "mosi": 0, "bits": 0}
             self.transactions.append({"cs_fall": k, "cs_rise": None, "edges": 0})
             self.edge_cycles.append([])
             if p_sck != cpol:
                 self._v("SCK = %d at CS_n's fall, mode %d needs CPOL = %d" % (p_sck, m, cpol))
             if cpha == 0:
-                self._shift_out(7, k + self.t_co, None)        # first bit: plain, from CS_n's fall
+                self._shift_out(7, k + self.t_co, None, self.miso_window is not None)   # first bit: from CS_n's fall
             else:
                 self.drive = None
         elif not p_cs and cs_n:                               # CS_n rises: the transaction ends
             tx = self.tx
             rec = self.transactions[-1]
-            rec["cs_rise"] = k
+            rec["cs_rise"] = self.last_rise = k
             if p_sck != tx["cpol"]:
                 self._v("SCK = %d at CS_n's rise, CPOL = %d" % (p_sck, tx["cpol"]))
             if tx["n"] % 16:
@@ -157,6 +180,8 @@ class SpiSlaveRef:
         bit = (n % 16) // 2                                    # 0 = MSB
         sampling = leading == (tx["cpha"] == 0)
         if sampling:
+            if n % 16 == 0 and self.drive is not None and self.drive[3]:
+                self.drive = self.drive[:2] + (k, True)      # the first bit's window ends w after this edge
             lim = self.P // 4
             if self.last_mosi_change is not None and self.last_mosi_change > k - lim:
                 self._v("MOSI changed %d cycles before the sampling edge (setup %d)" % (k - self.last_mosi_change, lim))
@@ -174,7 +199,7 @@ class SpiSlaveRef:
             elif bit < 7:                                      # trailing edge: shift the next bit
                 self._shift_out(6 - bit, k + self.t_co, k + H if w else None)
             else:                                              # after a byte: next byte's MSB, plain
-                self._shift_out(7, k + self.t_co, None)
+                self._shift_out(7, k + self.t_co, None, w)
         tx["n"] = n + 1; tx["last"] = k
         self.transactions[-1]["edges"] = n + 1
 
@@ -183,9 +208,10 @@ class SpiSlaveRef:
         if self.tx is None or self.drive is None:
             self.miso = 1
         else:
-            b, valid_from, predicted = self.drive
+            b, valid_from, predicted, one_sided = self.drive
             if k >= valid_from:
-                if predicted is None or abs(k - predicted) <= self.miso_window:
+                if predicted is None or (k <= predicted + self.miso_window if one_sided
+                                         else abs(k - predicted) <= self.miso_window):
                     self.miso = b
                 else:
                     self.miso = 1 - b

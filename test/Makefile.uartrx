@@ -16,9 +16,10 @@ PROJECT_SOURCES = project.v pe_timebase.v pe_gpio.v pe_imem.v pe_fifo.v pe_core.
 # Make tools.* importable from cocotb test modules:
 export PYTHONPATH := $(PWD)/..
 
+# Own build directory (sim_build/uartrx), so this suite and the other firmware suites can run concurrently.
 # RTL simulation only: there is no gate-level (GATES=yes) variant of this Makefile.
 # Gate-level simulation is test/Makefile (test_host), which drives only the top-level pins.
-SIM_BUILD				= sim_build/rtl
+SIM_BUILD				= sim_build/uartrx
 VERILOG_SOURCES += $(addprefix $(SRC_DIR)/,$(PROJECT_SOURCES))
 # The instruction memory is an IHP SRAM macro; its simulation model (test/models, vendored from the
 # PDK) only instantiates the behavioural core under FUNCTIONAL.

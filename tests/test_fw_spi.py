@@ -38,7 +38,7 @@ def model_for(c):
 
 def case_errors(c, ref, pushes):
     """The four checks every firmware case makes (oracle and RTL), as a list of error strings."""
-    n = len(host_words(c)); errors = list(ref.violations)
+    n = len(host_words(c)); ref.finish(); errors = list(ref.violations)
     got = [w for _, w in pushes]
     if got != c["miso"][:n]: errors.append("pushed %s, expected %s" % ([hex(w) for w in got], [hex(w) for w in c["miso"][:n]]))
     want_mosi = [b for tx in c["txs"] for b in tx]
@@ -107,11 +107,12 @@ def test_spi_ref_accepts_a_perfect_master(mode):
     assert uo[t["cs_rise"]] >> 3 & 1 == 1 and uo[t["cs_rise"] - 1] >> 3 & 1 == 0
     bits = [(b >> (7 - i)) & 1 for b in miso for i in range(8)]
     assert len(sampling) == 16
-    first_of_byte = {0, 8} if mode & 1 == 0 else set()     # CPHA=0: each byte's MSB is driven plainly
+    first_of_byte = {0, 8} if mode & 1 == 0 else set()     # CPHA=0: each byte's MSB has a one-sided window
     for n, (e, b) in enumerate(zip(sampling, bits)):
         assert all(ui[k] == (b << 1) | 0x0D for k in range(e - P // 8, e + P // 8 + 1)), (n, e)
-        if n not in first_of_byte:                           # the window: complement just outside it
-            assert ui[e - P // 8 - 1] >> 1 & 1 == 1 - b and ui[e + P // 8 + 1] >> 1 & 1 == 1 - b, (n, e)
+        assert ui[e + P // 8 + 1] >> 1 & 1 == 1 - b, (n, e)  # the window's trailing side: the complement
+        if n in first_of_byte: assert ui[e - P // 8 - 1] >> 1 & 1 == b, (n, e)    # leading side: plain
+        else: assert ui[e - P // 8 - 1] >> 1 & 1 == 1 - b, (n, e)
     assert all(u & 0x0D == 0x0D for u in ui)
 
 
@@ -147,7 +148,7 @@ def test_spi_ref_ignores_everything_before_cs_n_is_first_high():
 
 
 def one_violation(ref, uo):
-    drive(ref, uo)
+    drive(ref, uo); ref.finish()
     assert len(ref.violations) == 1, ref.violations
     return ref.violations[0]
 
@@ -170,8 +171,6 @@ def test_spi_ref_rejects_sck_active_while_cs_n_is_high():
 
 def test_spi_ref_rejects_lead_lag_partial_byte_and_idle_level():
     """Added beyond the plan: the remaining structural rules each fire on a hand-made trace."""
-    def mk(cs_sck):                                            # [(cycles, cs_n, sck)] -> uo list
-        return [(cs << 3) | (s << 1) for n, cs, s in cs_sck for _ in range(n)]
     lead = mk([(5, 1, 0), (10, 0, 0)] + [(H, 0, i & 1) for i in range(1, 17)] + [(H, 0, 0), (5, 1, 0)])
     v = one_violation(SpiSlaveRef(CLK_HZ, SCK_HZ, 0, [0]), lead); assert "lead" in v, v
     lag = mk([(5, 1, 0)] + [(H, 0, i & 1) for i in range(16)] + [(5, 0, 0), (5, 1, 0)])
@@ -183,6 +182,52 @@ def test_spi_ref_rejects_lead_lag_partial_byte_and_idle_level():
     assert len(ref.violations) == 2 and "CS_n's fall" in ref.violations[0] and "CS_n's rise" in ref.violations[1], ref.violations
     gap = mk([(5, 1, 0)] + [(H, 0, i & 1) for i in range(16)] + [(2, 0, 0)] + [(H, 0, i & 1) for i in range(1, 17)] + [(H, 0, 0), (5, 1, 0)])
     v = one_violation(SpiSlaveRef(CLK_HZ, SCK_HZ, 0, [0, 0]), gap); assert "between bytes" in v, v
+
+
+def mk(cs_sck):                                                # [(cycles, cs_n, sck)] -> uo list
+    return [(cs << 3) | (s << 1) for n, cs, s in cs_sck for _ in range(n)]
+
+def full_tx(n=16):                                             # n edges, H apart, mode 0
+    return [(H, 0, i & 1) for i in range(n)] + [(H, 0, n & 1)]
+
+def test_spi_ref_flags_a_transaction_that_never_closes():
+    """CS_n lowered, a byte clocked, never raised: the CS_n-rise checks never run, finish() reports it."""
+    trace = mk([(5, 1, 0)] + [(H, 0, i & 1) for i in range(16)] + [(H, 0, 0)])
+    ref = SpiSlaveRef(CLK_HZ, SCK_HZ, 0, [0]); drive(ref, trace)
+    assert ref.violations == [] and ref.transactions[0]["cs_rise"] is None
+    ref.finish()
+    assert len(ref.violations) == 1, ref.violations
+    assert ref.violations[0] == "cycle %d: transaction still open at the end of the run (CS_n never rose)" % len(trace)
+
+def test_spi_ref_flags_a_transaction_without_sck_edges():
+    ref = SpiSlaveRef(CLK_HZ, SCK_HZ, 0, [0]); drive(ref, mk([(5, 1, 0), (10, 0, 0), (5, 1, 0)]))
+    assert ref.violations == []                                # 0 edges is a multiple of 16: only finish() sees it
+    ref.finish()
+    assert ref.violations == ["cycle 5: transaction with no SCK edges"], ref.violations
+
+def test_spi_ref_rejects_a_short_cs_idle():
+    idle10 = mk([(5, 1, 0)] + full_tx() + [(10, 1, 0)] + full_tx() + [(5, 1, 0)])
+    v = one_violation(SpiSlaveRef(CLK_HZ, SCK_HZ, 0, [0, 0]), idle10)
+    assert v.endswith("CS_n low again 10 cycles after it rose (idle >= %d)" % (H - 2)), v
+    ok = mk([(5, 1, 0)] + full_tx() + [(H - 2, 1, 0)] + full_tx() + [(5, 1, 0)])    # exactly H - 2: legal
+    ref = SpiSlaveRef(CLK_HZ, SCK_HZ, 0, [0, 0]); drive(ref, ok); ref.finish()
+    assert ref.violations == [], ref.violations
+
+def test_spi_ref_one_sided_window_on_a_cpha0_bytes_first_bit():
+    """A master that samples this bit 2w + 2 cycles late reads the complement; sampling it on the
+    edge, or early (the model cannot know when the edge comes), reads the bit."""
+    w = P // 8
+    uo, sampling = perfect_master(0, [0x83], P)
+    ref = SpiSlaveRef(CLK_HZ, SCK_HZ, 0, [0xC1], miso_window=w); ui = drive(ref, uo)
+    e, bit = sampling[0], 1                                    # 0xC1: MSB 1
+    level = lambda k: ui[k] >> 1 & 1
+    assert level(e) == bit and level(e - H // 2) == bit and level(e + w) == bit
+    assert level(e + 2 * w + 2) == 1 - bit
+
+def test_spi_ref_without_a_window_the_first_bit_is_held_to_the_next_shifting_edge():
+    uo, sampling = perfect_master(0, [0x83], P)
+    ref = SpiSlaveRef(CLK_HZ, SCK_HZ, 0, [0xC1]); ui = drive(ref, uo)       # no window: held to the shifting edge
+    assert ui[sampling[0] + 2 * (P // 8) + 2] >> 1 & 1 == 1
 
 
 # ---- the firmware on the oracle -------------------------------------------------------------
@@ -212,3 +257,29 @@ def test_spi_master_sentinel_mutant_is_rejected():
     src = (FIRMWARE / "spi_master.s").read_text(); assert MUTANT_HALF[0] in src
     ref, _ = run_case("mode0", src.replace(*MUTANT_HALF, 1))
     assert ref.violations, "the reference accepted an 8 % slow SCK (HALF 27)"
+
+DRAIN_AT = 70_000                       # > 65,535 ticks: WAITF TXE, R0 times out first (isa.md: Rt = R0 -> 65535)
+
+def run_blocked_push_case(text=None):
+    """mode0's three-word transaction with the core->host FIFO full (four words) and undrained until
+    cycle DRAIN_AT: the result pushes cannot land before it."""
+    c = CASES["mode0"]; words, equs = load("spi_master.s", text); ref = model_for(c)
+    pushes = run_model(words, equs["PRESCALE"], ref, cycle_budget(c) + DRAIN_AT, host_words=host_words(c),
+                       drain_from=DRAIN_AT, core_prefill=[0xDEAD, 0xBEEF, 0xCAFE, 0xF00D])
+    return ref, pushes
+
+def test_spi_result_push_waits_for_room():
+    """A result must not be dropped when the host leaves the FIFO full for more than the 65,535-tick
+    WAITF timeout: the firmware retries (BTO pushr) until the push lands."""
+    ref, pushes = run_blocked_push_case()
+    assert [w for _, w in pushes[:4]] == [0xDEAD, 0xBEEF, 0xCAFE, 0xF00D] and all(k >= DRAIN_AT for k, _ in pushes)
+    assert [w for _, w in pushes[4:]] == RX, pushes             # all three results, in order, none dropped
+    ref.finish(); assert ref.violations == [] and ref.mosi_bytes == TX, ref.violations
+
+def test_spi_result_push_without_the_retry_loses_a_word():
+    """The test above is not vacuous: with the retry removed (bare WAITF, then PUSH) a word is lost."""
+    src = (FIRMWARE / "spi_master.s").read_text()
+    bare = "pushr:\n  WAITF TXE, R0       ; retry on timeout: a full FIFO never drops the result\n  BTO  pushr\n  NOP\n"
+    assert bare in src
+    _, pushes = run_blocked_push_case(src.replace(bare, "pushr:\n  WAITF TXE, R0\n"))
+    assert [w for _, w in pushes[4:]] != RX and len(pushes) < 7, pushes

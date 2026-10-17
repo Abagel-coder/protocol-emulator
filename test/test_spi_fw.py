@@ -34,6 +34,7 @@ def make_test(name):
         dut._log.info("transactions %s; lead/lag %s; pushes %s", ref.transactions,
                       [(e[0] - t["cs_fall"], t["cs_rise"] - e[-1]) for t, e in zip(ref.transactions, ref.edge_cycles)],
                       [(k, hex(w)) for k, w in pushes])
+        ref.finish()
         errors = case_errors(CASES[name], ref, pushes)
         assert errors == [], errors
         assert drained == [w for _, w in pushes], (drained, pushes)
@@ -47,4 +48,5 @@ for _name in CASES: globals()["test_" + _name] = make_test(_name)
 async def spi_sentinel_mutant_is_rejected(dut):
     src = firmware_text("spi_master.s"); assert MUTANT_HALF[0] in src
     ref, _, _ = await run_case(dut, "mode0", src.replace(*MUTANT_HALF, 1))
+    ref.finish()
     assert ref.violations, "the reference accepted an 8 % slow SCK (HALF 27)"

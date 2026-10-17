@@ -50,7 +50,7 @@ A test passes when the model records no violation and the firmware's pushed word
 **Protocol.** 115200 baud, 8 data bits LSB first, no parity, one stop bit; idle high; the start bit is a falling edge. At 50 MHz one bit is 434.03 cycles. Firmware constants: `PRESCALE 1` (tick = 2 cycles), `BIT 217` (ticks per bit), `HALF 108` (ticks from the detected start edge to the middle of the start bit).
 
 **Firmware behaviour.**
-1. Wait for a falling edge on `ui[0]` (`WAITP UI, 0, FALL, R0`; on the 65,535-tick timeout just wait again).
+1. Wait for the line to be idle (`WAITP UI, 0, HIGH, R0`), then for the start bit (`WAITP UI, 0, LOW, R0`); both are level waits whose 65,535-tick timeout just rearms them. (A falling-edge wait was the first design: its rearm after a timeout leaves a two-cycle window in which a start edge is missed and the frame is corrupted, found in the Task 1 review; a level wait that rearms still sees the line low.) After a framing error the line is still low, so the idle wait also waits out a break.
 2. Arm `R1 = T + HALF` and wait; read the line: if it is high the edge was a glitch — back to 1 (false-start rejection).
 3. Eight times: `R1 += BIT`, wait, read the line, shift the bit into the byte LSB first (branch-free: `R7 = 0 - bit`, masked to `0x80`, OR'd into the byte after `SHR`).
 4. `R1 += BIT`, wait, read the stop bit. Result word = `{frame_error, data[7:0]}` with bit 8 set when the stop bit read low.
@@ -62,7 +62,7 @@ The sample instants are the detected edge plus 0.5, 1.5, …, 9.5 bits; the only
 
 - a plain frame: start, data LSB first, stop, each exactly `clk_hz / baud` cycles (fractional accumulation, no rounding drift);
 - `baud_error=±0.04`: the whole frame at 115200 × (1 ± 4 %) — the receiver must still decode it (the classic 8N1 tolerance budget);
-- `probe=True`: every data bit carries its value only in the middle quarter of the bit cell (±12.5 % of a bit around the ideal sample point) and its complement elsewhere — a receiver that samples outside that window reads a wrong byte. This is the mid-bit-sampling check;
+- `probe=True`: every data bit, and the stop bit, carries its value only in the middle quarter of the bit cell (±12.5 % of a bit around the ideal sample point) and its complement elsewhere — a receiver that samples outside that window reads a wrong byte or a false framing error. This is the mid-bit-sampling check. The stop bit's low tail is a deliberate glitch that only a receiver with a false-start check survives, so a probe frame must be followed by at least a quarter bit of idle (the model refuses a shorter gap);
 - `stop_low=True`: the stop bit is driven low — expected word has bit 8 set;
 - `glitch=n`: a low pulse of `n` cycles (shorter than half a bit) with no frame — nothing may be pushed;
 - `gap=n` idle cycles before the frame (0 allowed: back-to-back frames).

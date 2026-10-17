@@ -221,6 +221,30 @@ def test_waitt_stall_across_T_wrap_releases_at_deadline():
     tr += s.run(4)
     assert first_pin_write(tr) == 14, [t[1] for t in tr]
 
+# WAITT R0: as a deadline R0 reads 0 (isa.yaml semantics.waits), so the WAITT completes in the first cycle in
+# which bit 15 of (T - 0) == T is 0. Shared with test/test_core.py's waitt_r0_deadline_zero.
+#  (a) t0 = 0: bit 15 of T is 0 in cycle 0, so the WAITT completes in cycle 0, the SET executes in cycle 1
+#      and uo reads 1 from cycle 2.
+#  (b) t0 = 0xFFF8: T runs 0xFFF8..0xFFFF (bit 15 set: the deadline 0 is still ahead) and reaches 0 in
+#      cycle 8, so the WAITT stalls through cycle 7, completes in cycle 8, the SET executes in cycle 9 and
+#      uo reads 1 from cycle 10 (the wrap test's arithmetic: T == 0xFFF8 + k in cycle k).
+WAITT_R0_PROGRAM = "WAITT R0\nSET UO, 0x01\nHALT\nNOP"
+WAITT_R0_T0_WRAP = 0xFFF8
+
+def test_waitt_r0_deadline_zero_completes_at_once():
+    s = Sim(assemble(WAITT_R0_PROGRAM), t0=0)
+    tr = s.run(6)
+    assert first_pin_write(tr) == 2 and s.halted, [t[1] for t in tr]
+
+def test_waitt_r0_deadline_zero_waits_across_T_wrap():
+    s = Sim(assemble(WAITT_R0_PROGRAM), t0=WAITT_R0_T0_WRAP)
+    tr = s.run(8)                                               # cycles 0..7: T 0xFFF8..0xFFFF, still waiting
+    assert s.pc == 0 and not s.halted and s.T == 0, (s.pc, s.T)
+    tr += [s.step()]                                            # cycle 8: T == 0, bit 15 clear, completes
+    assert s.pc == 1
+    tr += s.run(5)
+    assert first_pin_write(tr) == 10, [t[1] for t in tr]
+
 # Zero timeout (isa.yaml semantics.waits): "If Rt's value is 0 the wait completes in its first cycle: TO = 0
 # if the condition is already true, else TO = 1." The timeout register is R3 loaded with 0 (Rt = R0 would
 # mean 65535). Each program runs a condition-false wait first (WAITF RXV: nothing queued; WAITP HIGH on

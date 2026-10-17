@@ -104,7 +104,8 @@ module pe_core (
     wire _unused_d = &{d[14:0], 1'b0};
   end endgenerate
   wire        waitt_done = waitt_ok[w_rt];
-  // Zero test per register for the first-cycle timeout rule (tmo == 0; R0 means 65535, never 0).
+  // Zero test per register for the first-cycle timeout rule: reg_zero[w_rt] stands for tmo == 0 (R0 means
+  // 65535, never 0, so reg_zero[0] = 0).
   wire [7:0] reg_zero;
   assign reg_zero[0] = 1'b0;
   generate for (gk = 1; gk < 8; gk = gk + 1) begin : g_rz

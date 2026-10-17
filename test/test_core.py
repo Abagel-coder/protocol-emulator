@@ -5,7 +5,7 @@ from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge
 from tools.asm import assemble, assemble_file
 from imem_load import load_imem
 from tests.test_sim import (WAITT_TO_PROGRAM, waitt_program,   # the same programs the oracle's tests run
-                            WAITT_WRAP_PROGRAM, WAITT_WRAP_T0, ZERO_TIMEOUT_WAITS, ZERO_TIMEOUT_UO,
+                            WAITT_WRAP_PROGRAM, WAITT_WRAP_T0, WAITT_R0_PROGRAM, WAITT_R0_T0_WRAP, ZERO_TIMEOUT_WAITS, ZERO_TIMEOUT_UO,
                             zero_timeout_program)
 
 FIRMWARE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "firmware")
@@ -293,6 +293,30 @@ async def waitt_stall_across_T_wrap_releases_at_deadline(dut):
         uo.append(int(dut.uo_out.value)); t.append(int(dut.t_out.value))
     assert t == [(WAITT_WRAP_T0 + k) & 0xFFFF for k in range(16)], [hex(v) for v in t]
     assert first_nonzero(uo) == 14, uo
+    assert int(dut.halted.value) == 1
+
+@cocotb.test()
+async def waitt_r0_deadline_zero(dut):
+    """WAITT R0: as a deadline R0 means 0, so the WAITT completes in the first cycle in which bit 15 of T is
+    0 (waitt_ok[0] = !T[15], the R0 path of core v0.1's per-register compare). tests/test_sim.py's
+    WAITT_R0_PROGRAM, WAITT R0 at address 0, first executing in cycle 0. (a) T = 0 in cycle 0 (tb_core.v):
+    it completes at once, the SET executes in cycle 1 and uo reads 1 from cycle 2 (an inverted R0 sign,
+    waitt_ok[0] = T[15], stalls it for ~32k cycles). (b) T deposited as 0xFFF8 in cycle 0, as in
+    waitt_stall_across_T_wrap_releases_at_deadline, so T == 0xFFF8 + k in cycle k: bit 15 stays set
+    through 0xFFFF (cycle 7), T reaches 0 in cycle 8, the WAITT completes there, the SET executes in
+    cycle 9 and uo reads 1 from cycle 10 exactly (a compare that ignores the wrap releases it in cycle 0,
+    so uo reads 1 from cycle 2)."""
+    await boot(dut, WAITT_R0_PROGRAM); tr = await trace(dut, 6)
+    assert first_nonzero([t[0] for t in tr]) == 2, [t[0] for t in tr]
+    assert int(dut.halted.value) == 1
+    await boot(dut, WAITT_R0_PROGRAM)
+    dut.u_tb.t_out.value = WAITT_R0_T0_WRAP
+    uo = []; t = []
+    for _ in range(14):
+        await FallingEdge(dut.clk)
+        uo.append(int(dut.uo_out.value)); t.append(int(dut.t_out.value))
+    assert t == [(WAITT_R0_T0_WRAP + k) & 0xFFFF for k in range(14)], [hex(v) for v in t]
+    assert first_nonzero(uo) == 10, uo
     assert int(dut.halted.value) == 1
 
 @cocotb.test()

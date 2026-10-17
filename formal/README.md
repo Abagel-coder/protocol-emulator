@@ -430,7 +430,7 @@ mutants (no brief mutant touches the flags) that prove T1f and the flag tests de
 | # | Mutation | Properties that fail | Directed tests that fail |
 |---|---|---|---|
 | W1 | `waitt_done = (t_in == rt_v)` (v0's equality rule) | T1, T1e (step 3); the late-release cover becomes unreachable | `waitt_late_deadline_completes_in_one_cycle`, `waitt_boundary_32768_ahead_waits_exactly`, `waitt_leaves_to_unchanged`; host `run_low_across_deadline_resumes_immediately` (no release within 20 edges of RUN's return); the fuzzer (program 1, cycle 136) |
-| W2 | inverted sign: `waitt_done = waitt_diff[15]` in core v0.1 (today `waitt_ok[k] = d[15]` in `g_wok`; see F2 below) | T1, T1d, T1e (steps 3-4), T1c (step 5) | the same three; host `run_low_across_...` (released before RUN was ever dropped); the fuzzer (program 1, cycle 17) |
+| W2 | inverted sign: `waitt_done = waitt_diff[15]` in core v0.1 (today `waitt_ok[k] = d[15]` in `g_wok`; the closest precomputed-form analogue is F1 below, the R0 sign inversion) | T1, T1d, T1e (steps 3-4), T1c (step 5) | the same three; host `run_low_across_...` (released before RUN was ever dropped); the fuzzer (program 1, cycle 17) |
 | W3 | window on bit 14: `waitt_done = !waitt_diff[14]` in core v0.1 (today `waitt_ok[k] = !d[14]` in `g_wok`) | T1, T1e (step 4), T1c (step 5) | `waitt_late_...` (32,767 behind stalls), `waitt_boundary_...` (32,768 ahead released at once); the fuzzer passes (bit 14 and bit 15 of `T - Rn` disagree only for deadlines 16,384..32,767 ticks behind or 16,385..32,768 ahead, which its programs do not produce) |
 | W4 | `timed_to = wait_active ? (t_in == wdead) : (tmo == 16'd1)` | T4c only (step 1) | none directed; the differential fuzzer |
 | W5 | `wdead <= t_in` (timeout dropped) | P4 only (step 4) | `waitp_timeout_and_release`, `r0_timeout_is_65535_ticks`, `waitt_leaves_to_unchanged`; the fuzzer |
@@ -440,10 +440,10 @@ mutants (no brief mutant touches the flags) that prove T1f and the flag tests de
 
 **Fetch-loop timing (precomputed `WAITT` compare and zero test, 2026-10-16).** `waitt_diff` is gone:
 `waitt_ok[k] = !((T - Rk)[15])` and `reg_zero[k] = (Rk == 0)` are computed for every register
-(generate blocks `g_wok`, `g_rz`; R0 reads as 0, so `waitt_ok[0] = !T[15]` and `reg_zero[0] = 0`)
+(generate blocks `g_wok`, `g_rz`; R0 reads as 0 as a deadline, so `waitt_ok[0] = !T[15]`; as a timeout R0 means 65535, so `reg_zero[0] = 0`)
 and only selected by `w_rt` (`waitt_done = waitt_ok[w_rt]`, first-cycle `timed_to = reg_zero[w_rt]`),
 taking the 16-bit subtract off the instruction-word -> `adv` path. Behaviour is unchanged and every
-property proves as before. Mutants in a scratch copy, `bmc` (first failing step) plus the core suite:
+property proves as before. Mutants in a scratch copy: the property columns come from the scratch `--keep-going` `bmc` run (every failing assertion, with its first failing step), as in the v0.1 paragraph above, plus the core suite:
 
 | # | Mutation | Properties that fail | Directed tests / fuzzer that fail |
 |---|---|---|---|

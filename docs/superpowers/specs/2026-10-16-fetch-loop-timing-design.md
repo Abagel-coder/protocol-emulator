@@ -61,3 +61,16 @@ Branches `exp-synth-delay1` and `exp-synth-delay4` add `SYNTH_STRATEGY` "DELAY 1
 ## 5. Out of scope
 
 An instruction register (changes the one-cycle model and the proofs), relaxing the clock (owner declined), lanes.
+
+## Result (2026-10-17)
+
+`gds` run [39014059324](https://github.com/Abagel-coder/protocol-emulator/actions/runs/39014059324) on commit `4badf9e` (the RTL precompute of `20edbfe` plus `SYNTH_STRATEGY` "DELAY 4"), slow-corner setup slack at the 20 ns clock (`timing__setup__ws__corner:nom_slow_1p08V_125C`):
+
+| Build | Slow-corner setup slack |
+|---|---|
+| default synthesis (`AREA 0`), before the change (`714d81a`/`a850747`) | -0.740 ns |
+| flow experiment "DELAY 1" (run 39007956049) | +0.655 ns |
+| flow experiment "DELAY 4" (run 39007956627) | +1.367 ns |
+| "DELAY 4" with the RTL precompute (run 39014059324, this design) | +1.906 ns |
+
+Typical-corner setup is +8.766 ns and worst hold +0.120 ns; the metrics gate, precheck and gate-level simulation pass, so the clock stays at 50 MHz and the plan's "out of scope: relaxing the clock" held. Cell delta against the design before the change (`a850747`, `AREA 0`; saved `metrics-a850747.json`): standard cells 5,539 -> 6,797 (+1,258), standard-cell area 79,839 -> 94,717 µm² (+14,878 µm², +18.6 %), utilisation 13.87 % -> 15.52 % (core 902,417 µm², macro included), routed wirelength 209,170 -> 323,585 µm. The delta is the precompute and the "DELAY 4" strategy together: this run does not separate them, and the 250-350 cell estimate for the precompute above was an estimate; the cell count of the "DELAY" experiment runs was not compared. The 6,797 standard cells are 5,527 logic cells after synthesis plus 1,270 added by place-and-route (1,157 timing-repair buffers, 68 clock buffers, 25 clock inverters, 20 antenna cells).

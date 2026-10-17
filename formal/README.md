@@ -447,7 +447,7 @@ property proves as before. Mutants in a scratch copy: the property columns come 
 
 | # | Mutation | Properties that fail | Directed tests / fuzzer that fail |
 |---|---|---|---|
-| F1 | `waitt_ok[0] = t_in[15]` (R0 sign inverted) | T1, T1d, T1e (step 3) | the fuzzer only (program 89: R3) |
+| F1 | `waitt_ok[0] = t_in[15]` (R0 sign inverted) | T1, T1d, T1e (step 3) | the directed `waitt_r0_deadline_zero` (RTL, `test/test_core.py`) and `test_waitt_r0_deadline_zero_*` (oracle, `tests/test_sim.py`); the fuzzer too (program 89: R3) |
 | F2 | `d = regs[gk] - t_in` (operands swapped) | T1, T1e (steps 3-4), T1c (step 5) | `waitt_late_deadline_...`, `waitt_boundary_32768_...`, `waitt_leaves_to_unchanged`, `waitt_stall_across_T_wrap_...`; the fuzzer (program 1, cycle 17) |
 | F3 | `reg_zero[0] = 1` (R0 timeout read as 0) | T4c (step 1) | `waitp_timeout_and_release`, `r0_timeout_is_65535_ticks`, `host_fifo_push_pop`; the fuzzer passes |
 | F4 | `waitt_done = waitt_ok[f_rd]` (wrong field selects) | T1, T1e (step 4) | `waitt_period_holds_across_T_wraparound`, `waitt_boundary_32768_...`, `waitt_stall_across_T_wrap_...`; the fuzzer (program 1, cycle 17) |

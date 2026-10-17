@@ -1,10 +1,10 @@
 # Handoff — protocol-emulator ASIC (Jane Street / Tiny Tapeout CMOS5L)
 
-Written 2026-09-18, updated 2026-10-16 after the SRAM instruction-memory branch's two GitHub hardening runs. **`main` holds core v0 and core v0.1 (merged 2026-10-15, `ac0e555`). The SRAM instruction memory is on branch `sram-imem`: the code is complete and reviewed, the flow completes in CI, and the branch is NOT merged. Four owner decisions (artifact quota, timing, release label, merge) are open; do not merge without the owner's say-so.**
+Written 2026-09-18, updated 2026-10-17 after the first green hardening of the SRAM-macro design. **`main` holds core v0 and core v0.1 (merged 2026-10-15, `ac0e555`). The SRAM instruction memory is on branch `sram-imem`: complete, reviewed, and hardened green in CI (`gds` run 39014059324 on `4badf9e`: slow-corner setup +1.91 ns at 50 MHz, precheck and gl_test green). The branch is NOT merged; the merge, the Pages re-enable and the release label are the owner's decisions; do not merge without the owner's say-so.**
 
 ## Paste this into the new session
 
-> Continue the protocol-emulator ASIC project in this folder. Read `HANDOFF.md` first, then `PLAN.md`. Branch `sram-imem` (512 x 16 SRAM instruction memory) is reviewed and its flow completes in CI, but two things block the green run: the GitHub artifact quota and negative slow-corner setup slack. Check "What is left" for the four open owner decisions, ask which have been answered, then apply the answers (Task 4's README results row needs a green `gds` run). After that start plan C (required protocols) with the writing-plans skill. Run at most two agents, only one of them committing, tell each to do the work itself in the foreground, and free memory on this Mac first (see "Environment").
+> Continue the protocol-emulator ASIC project in this folder. Read `HANDOFF.md` first, then `PLAN.md`. Branch `sram-imem` (512 x 16 SRAM instruction memory) is reviewed and hardened green (run 39014059324, slow-corner setup +1.91 ns at 50 MHz, precheck and gl_test green). Check "What is left" for the open owner items (merge of `sram-imem`, re-enable GitHub Pages, release label), ask which have been answered, then apply the answers. Plan C (required protocols) is being worked in a separate session on branch `claude/agitated-hamilton-5fbcad` (not merged); check with the owner before starting it again here. Run at most two agents, only one of them committing, tell each to do the work itself in the foreground, and free memory on this Mac first (see "Environment").
 
 ## Where everything is
 
@@ -12,7 +12,7 @@ Written 2026-09-18, updated 2026-10-16 after the SRAM instruction-memory branch'
 |---|---|
 | Competition plan, timeline, decision log, risks | `PLAN.md` |
 | Approved architecture (v1) | `docs/superpowers/specs/2026-09-15-protocol-emulator-design.md` |
-| Implementation plans executed | `docs/superpowers/plans/2026-09-16-core-v0.md` (core v0, 10 tasks), `docs/superpowers/plans/2026-10-15-sram-imem.md` (SRAM, 4 tasks; Task 4 = docs and results row, open) |
+| Implementation plans executed | `docs/superpowers/plans/2026-09-16-core-v0.md` (core v0, 10 tasks), `docs/superpowers/plans/2026-10-15-sram-imem.md` (SRAM, 4 tasks; Task 4, the docs and results row, done 2026-10-17) |
 | SRAM instruction-memory design | `docs/superpowers/specs/2026-10-15-sram-imem-design.md` |
 | Research: brief, prior art, verification, novelty decisions N1–N10 | `docs/research/` |
 | ISA source of truth and generated reference | `isa/isa.yaml`, `docs/isa.md` |
@@ -28,15 +28,16 @@ Written 2026-09-18, updated 2026-10-16 after the SRAM instruction-memory branch'
 | Tests | `tests/` (pytest), `test/` (cocotb: `Makefile` = host/top level, `Makefile.core`, `Makefile.blocks`, `Makefile.uartfw`) |
 | Formal proofs and their honest scope | `formal/core.sby`, `formal/core_props.v`, `formal/timebase_props.v`, `formal/README.md` |
 | Toolchain bootstrap | `scripts/setup_env.sh` (writes `env.sh`, git-ignored) |
-| Per-task briefs, reports, review diffs, progress ledger (**local only, git-ignored**) | `.superpowers/sdd/` (SRAM: `sram-task-N-brief.md`, `sram-task-N-report.md`, `sram-final-review.md`, `sram-final-rereview.md`); CI logs are saved there when downloaded (`gds-ac0e555.log`, `gds-10a9583.log`; the log of `714d81a` was not saved) |
-| GitHub | https://github.com/Abagel-coder/protocol-emulator (**private**; Pages enabled) |
+| Per-task briefs, reports, review diffs, progress ledger (**local only, git-ignored**) | `.superpowers/sdd/` (SRAM: `sram-task-N-brief.md`, `sram-task-N-report.md`, `sram-final-review.md`, `sram-final-rereview.md`); CI logs and metrics are saved there when downloaded (`gds-ac0e555.log`, `gds-10a9583.log`, `gds-4badf9e.log`, `metrics-4badf9e.json`; the log of `714d81a` was not saved) |
+| GitHub | https://github.com/Abagel-coder/protocol-emulator (**public since 2026-10-16**, so no artifact quota; GitHub Pages was unpublished by the change of visibility, `gh api repos/Abagel-coder/protocol-emulator/pages` returns 404, so the `gds` workflow's `viewer` job fails until the owner re-enables Pages) |
 
 ## State
 
+- **Latest (2026-10-17):** branch `sram-imem` at `ad51c21` (tests and comments only over `4badf9e`; same netlist). The green hardening of record is `gds` run [39014059324](https://github.com/Abagel-coder/protocol-emulator/actions/runs/39014059324) on `4badf9e` (jobs `gds`, `metrics_gate`, `precheck`, `gl_test` success; `viewer` failed because Pages is unpublished). Numbers in "Core v1.0 (SRAM) hardening result" below and in the README results row. The bullets that follow describe the state at `41ac372`/`10a9583` and are kept as history.
 - Branch `sram-imem`: the commit that carries this handoff update (`git log -1`) sits on `41ac372` (RTL, tools, tests and flow files are unchanged by it; it edits documents and one comment in `src/pdn_cfg.tcl`). `origin/sram-imem` was last pushed at `10a9583`; check `git status -sb` for what is still local. `main` is at `ac0e555` (core v0.1, merged 2026-10-15 by fast-forward; CI on it green on all four workflows).
-- The SRAM work: design `docs/superpowers/specs/2026-10-15-sram-imem-design.md`, plan `docs/superpowers/plans/2026-10-15-sram-imem.md`. Tasks 1-3 (the `pe_imem` block, the chip integration with 512-word tools and tests and `READ_STATUS` bit 5, the flow configuration and metrics gate) are implemented, each reviewed with mutation checks; the whole-branch review and its fix wave are approved (reports `.superpowers/sdd/sram-*.md`, local only). Task 4 (this handoff, the README results row once a green run exists) is the open one.
+- The SRAM work: design `docs/superpowers/specs/2026-10-15-sram-imem-design.md`, plan `docs/superpowers/plans/2026-10-15-sram-imem.md`. Tasks 1-3 (the `pe_imem` block, the chip integration with 512-word tools and tests and `READ_STATUS` bit 5, the flow configuration and metrics gate) are implemented, each reviewed with mutation checks; the whole-branch review and its fix wave are approved (reports `.superpowers/sdd/sram-*.md`, local only). Task 4 (this handoff and the README results row) was completed on 2026-10-17 from the green run 39014059324.
 - Local suites at `41ac372` (2026-10-16): host 22, core 20 (19 directed + the 200-program differential fuzzer, each program tiled 8 times over the 512 words), blocks 7, UART firmware equivalence 1, pytest 50, Verilator lint clean, `formal/core.sby` five tasks pass (sby 5/5), `tools/gen_isa.py --check` clean.
-- GitHub Actions on `sram-imem`: the `test` and `docs` workflows failed on `714d81a` only at the artifact upload ("Artifact storage quota has been hit"; every test step was green); the `gds` workflow is the subject of the section below. After the quota failure the controller deleted 42 artifacts (GDS_logs, gds_render, tt_submission; 1.68 GB) from 14 intermediate runs and later the bundle of the main-merge run 36945175253; the bundles of the runs of record 35402020440 (core v0) and 37027426422 (core v0.1) were kept.
+- GitHub Actions on `sram-imem` (at `714d81a`): the `test` and `docs` workflows failed only at the artifact upload ("Artifact storage quota has been hit"; every test step was green); the repository was made public on 2026-10-16, which removed the quota. The `gds` workflow is the subject of the sections below. After the quota failure the controller deleted 42 artifacts (GDS_logs, gds_render, tt_submission; 1.68 GB) from 14 intermediate runs and later the bundle of the main-merge run 36945175253; the bundles of the runs of record 35402020440 (core v0) and 37027426422 (core v0.1) were kept.
 
 ### Core v0 hardening result (GitHub `gds` run 35402020440, commit `f743131`)
 
@@ -68,9 +69,28 @@ Source: the job log (`.superpowers/sdd/gds-ac0e555.log`, git-ignored) and the ru
 
 Core v0.1 is 196 cells smaller than core v0 and its worst setup slack is 2.27 ns higher (4.848 against 2.58 ns). The slack numbers come from `metrics.json`; the run summary is not needed.
 
-### Core v1 hardening (SRAM) status: GitHub `gds` runs on `sram-imem`
+### Core v1.0 (SRAM) hardening result (GitHub `gds` run [39014059324](https://github.com/Abagel-coder/protocol-emulator/actions/runs/39014059324), commit `4badf9e`, branch `sram-imem`, 2026-10-17)
 
-Core v0.1 had 12,561 standard cells and no macro. Two runs so far (both stopped by the artifact quota, not by the flow):
+Design at `4badf9e`: core v0.1 + 512x16 IHP SRAM instruction memory (`pe_imem`, macro `RM_IHPSG13_1P_512x16_c2_bm_bist`) + per-register precompute of the `WAITT` compare (`20edbfe`) + `SYNTH_STRATEGY` "DELAY 4" (`4badf9e`). Jobs: `gds`, `metrics_gate`, `precheck`, `gl_test` success; `viewer` failure (Pages unpublished). Sources: the `metrics_gate` job log, the `gds` job log (`.superpowers/sdd/gds-4badf9e.log`) and the run's `metrics.json` (`.superpowers/sdd/metrics-4badf9e.json`, local only); metric key in brackets.
+
+| Metric | Value (core v0.1 in brackets) |
+|---|---|
+| Cells | 1 macro (45,309.31 µm²) + 6,797 standard cells (5,527 logic from the post-synthesis report, 1,270 added by place-and-route: 1,157 timing-repair buffers of which 745 hold buffers, 68 clock buffers, 25 clock inverters, 20 antenna cells) [12,561] |
+| Standard-cell area | 94,717 µm² (`design__instance__area__stdcell`) [192,394 µm²] |
+| Utilisation of the 6x4 core | 15.52 % (`design__instance__utilization`; std cells + macro over 902,417 µm²) [21.32 %] |
+| Setup slack @ 50 MHz | slow corner +1.906 ns, typical +8.766 ns (`timing__setup__ws__corner:*`) [+4.848 ns slow] |
+| Hold slack | +0.120 ns (`timing__hold__ws`, fast corner) [+0.123 ns] |
+| Routing DRC / antenna violations / LVS | 0 / 0 / 0 (`route__drc_errors`, `antenna__violating__nets`, `design__lvs_error__count`) |
+| Max slew / max cap / max fanout violations | 0 / 0 / 94 per corner |
+| Routed wirelength | 323,585 µm over 6,777 nets (`route__wirelength`, `route__net`) |
+| Magic DRC | 57,923 errors, non-fatal by configuration with the macro present; 5 Magic illegal overlaps (flow warning); KLayout DRC is the `precheck` job (passed) |
+| Gate-level simulation | `gl_test` passed (22 of 22 tests) |
+
+Timing history of the macro design (slow-corner setup at 50 MHz): `714d81a`/`a850747` default `AREA 0` synthesis -0.740 ns; experiment "DELAY 1" +0.655 ns (run 39007956049); "DELAY 4" +1.367 ns (run 39007956627); "DELAY 4" plus the RTL precompute of the `WAITT` compare +1.906 ns (this run). The 50 MHz clock stays: no `CLOCK_PERIOD`, `info.yaml` or firmware change.
+
+### Earlier SRAM hardening runs (history): GitHub `gds` runs on `sram-imem`
+
+Core v0.1 had 12,561 standard cells and no macro. The first two runs of the macro design (both stopped by the artifact quota, not by the flow):
 
 | | Harden 1: run 38838496042, commit `714d81a` | Harden 2: run [38841114120](https://github.com/Abagel-coder/protocol-emulator/actions/runs/38841114120), commit `10a9583`, 59 min |
 |---|---|---|
@@ -85,17 +105,16 @@ Core v0.1 had 12,561 standard cells and no macro. Two runs so far (both stopped 
 | Magic DRC | not reached | 57,923 errors (non-fatal by configuration while the macro is present; the precheck's KLayout DRC is the real DRC gate and did not run) |
 | Job result | failed at IRDropReport | failed only at the artifact upload (quota), so the metrics gate, precheck, `gl_test` and the viewer were skipped |
 
-The fix between the runs was `10a9583` (adopt Loom's pdngen wrapper in `src/pdn_cfg.tcl`; Apache-2.0, attributed): the first file was LibreLane's default minus the macro grid, which left the Metal4 stripes short of the macro. The standard-cell count is 5,535 plus the macro, against 12,561 cells for core v0.1 (the 64-word flip-flop memory is gone and the macro holds eight times the words). The timing cause is the macro's clock-to-output of about 6.3 ns inside the fetch loop (`A_DOUT` -> decode -> `next_pc` -> `A_ADDR`) at the 20 ns clock. None of these numbers are in `README.md`'s Results table: there is no complete run to quote. Logs: `.superpowers/sdd/gds-10a9583.log` is saved; `gds-714d81a.log` is not.
+The fix between the runs was `10a9583` (adopt Loom's pdngen wrapper in `src/pdn_cfg.tcl`; Apache-2.0, attributed): the first file was LibreLane's default minus the macro grid, which left the Metal4 stripes short of the macro. The standard-cell count is 5,535 plus the macro, against 12,561 cells for core v0.1 (the 64-word flip-flop memory is gone and the macro holds eight times the words). The timing cause is the macro's clock-to-output of about 6.3 ns inside the fetch loop (`A_DOUT` -> decode -> `next_pc` -> `A_ADDR`) at the 20 ns clock. These two runs are not in `README.md`'s Results table; the green run above is. Logs: `.superpowers/sdd/gds-10a9583.log` is saved; `gds-714d81a.log` is not.
 
 ## What is left (in order)
 
-1. **Owner decisions** (all open; the code documents the current choice):
-   1. **Artifact quota.** The repository is private and the free quota is 500 MB; each `gds` run adds about 130 MB, and GitHub's accounting lagged the deletions by hours (294 MB stored still hit the quota). Make the repository public (the competition requires open source, and public repositories have no artifact quota) or set an Actions spending limit above zero. Until then every run that reaches an upload fails and the metrics gate, precheck, `gl_test` and viewer are skipped.
-   2. **Timing.** Slow-corner setup slack is negative with the macro's clock-to-output in the fetch loop. Options: relax `CLOCK_PERIOD` to 25 ns (40 MHz), after which `info.yaml` `clock_hz`, the UART firmware's bit constant (434 cycles per bit, `firmware/uart_tx.s`) and the docs change; or change the core (the review's note: a separate gate job instead of the gate inside `gds`, so a slack failure does not hide the precheck and gate-level results, is also the owner's call). The metrics gate fails until this is resolved.
-   3. **Release label.** `src/project.v` calls the SRAM build "core v1", which collides with "spec v1"; the owner names the release.
-   4. **Merge of `sram-imem`** into `main`, after 1 and 2 and a green run.
-2. **Task 4 of the SRAM plan:** once one `gds` run is green end to end (metrics gate, precheck, `gl_test`), add the README results row from that run's `metrics.json` (save it unchanged under `tests/data/`, as was done for core v0.1), and delete the superseded run bundles to stay under the quota.
-3. **Plan C** (required protocols: UART RX, SPI master modes 0-3, I2C master with reference models; schedule in `PLAN.md` section 3, freeze Nov 8).
+1. **Owner items** (the code documents the current choice):
+   1. **Merge of `sram-imem`** into `main` (green run 39014059324; the timing decision is done: the 50 MHz clock is kept). Not merged until the owner says so.
+   2. **Re-enable GitHub Pages** (`gh api repos/Abagel-coder/protocol-emulator/pages` returns 404 since the repository went public on 2026-10-16); the `gds` workflow's `viewer` job fails until then.
+   3. **Release label.** `src/project.v` calls the SRAM build "core v1", which collides with "spec v1"; the README row says "core v1.0", provisionally. The owner names the release.
+   (Settled: the artifact quota, by making the repository public on 2026-10-16; the timing decision, by the green run at 50 MHz.)
+2. **Plan C** (required protocols: UART RX, SPI master modes 0-3, I2C master with reference models; schedule in `PLAN.md` section 3, freeze Nov 8). Status: worked in a separate session on branch `claude/agitated-hamilton-5fbcad` (not merged; it is not part of `sram-imem` or `main`).
 
 ### Minor findings logged during task reviews (triaged in the whole-branch review)
 
@@ -150,7 +169,7 @@ cd formal && sby -f core.sby       # all five tasks
 - Interrupted agents leave uncommitted partial work. On resume, check `git status` and the ledger before re-dispatching, and tell the next agent to treat the working tree as unverified.
 - Reviews with mutation testing found real gaps every time (inert tests, surviving mutants in the formal properties). Keep asking reviewers to prove a test or property fails when the fix is reverted.
 - Big agents stall when the machine swaps; make every agent write its report file incrementally and commit per group, so a stalled agent can be resumed (SendMessage to its id) or its work finished by hand. Run at most two agents at a time on this Mac (the SRAM work used two when swap was 3.7 GB; earlier sessions stalled when the machine swapped), and only one of them commits: a second agent writes files only and the controller commits, because two agents committing in one working tree swept a staged `git rm` into the wrong commit on 2026-10-15.
-- **GitHub artifact quota (private repository, 500 MB free).** Every `gds` run uploads `GDS_logs`, `gds_render` and `tt_submission` (about 130 MB per run); the `test` and `docs` jobs fail at their own upload once the quota is hit even though every test step passed, and a failed gds upload skips the metrics gate, precheck, `gl_test` and viewer. GitHub's usage figure lags deletions by hours. Delete superseded bundles as you go (`gh api repos/Abagel-coder/protocol-emulator/actions/artifacts` lists them, `gh api -X DELETE repos/Abagel-coder/protocol-emulator/actions/artifacts/<id>` removes one) and KEEP the artifacts of the runs of record: 35402020440 (core v0) and 37027426422 (core v0.1). The run of the main merge (36945175253) was identical RTL to core v0 and its bundle is already deleted. Making the repository public removes the quota (owner decision 1).
+- **GitHub artifact quota (private repository, 500 MB free).** Every `gds` run uploads `GDS_logs`, `gds_render` and `tt_submission` (about 130 MB per run); the `test` and `docs` jobs fail at their own upload once the quota is hit even though every test step passed, and a failed gds upload skips the metrics gate, precheck, `gl_test` and viewer. GitHub's usage figure lags deletions by hours. Delete superseded bundles as you go (`gh api repos/Abagel-coder/protocol-emulator/actions/artifacts` lists them, `gh api -X DELETE repos/Abagel-coder/protocol-emulator/actions/artifacts/<id>` removes one) and KEEP the artifacts of the runs of record: 35402020440 (core v0) and 37027426422 (core v0.1). The run of the main merge (36945175253) was identical RTL to core v0 and its bundle is already deleted. The repository was made public on 2026-10-16, which removes the quota; the advice is kept in case it goes private again.
 - A push cancels the `gds` run in progress on the same branch (`cancel-in-progress`); do not push while a run you want is still going. A docs-only commit can carry `[skip ci]`.
 
 ## After the SRAM branch: next plans (not written yet)
@@ -159,7 +178,7 @@ cd formal && sby -f core.sby       # all five tasks
 2. **Protocol firmware + reference models (plan C, required by the Nov 8 freeze: do this first)**: UART RX, SPI master/slave, I2C master/slave, then USB low speed and 10BASE-T.
 3. **Verification depth**: MCY mutation score, EQY RTL-vs-netlist equivalence, cocotb-coverage crosses, microcotb replay on the FPGA board, measured AI-assisted property drafting.
 4. **Generate field-slice macros** into `src/isa_defs.vh` (e.g. `ISA_BPIN_LEVEL_MSB/LSB`) and use them in `pe_core.v`, so `gen_isa.py --check` really pins the layout (today only the fuzzer does); also generate the class-count sentence in `docs/info.md`.
-5. **Owner decisions carried over:** the four open SRAM decisions under "What is left". (Decided 2026-10-01, branch `core-v0.1`: the wrap-safe `WAITT` deadline compare per spec §6, with the `t_in + tmo` adder moved off the `adv` critical path; the UART timing reference moved from `src/` to `test/uart_tx_ref.v`. Decided 2026-10-15: `core-v0` and `core-v0.1` merged into `main`.)
+5. **Owner items carried over:** merge of `sram-imem`, re-enable Pages, the release label (under "What is left"). (Decided 2026-10-01, branch `core-v0.1`: the wrap-safe `WAITT` deadline compare per spec §6, with the `t_in + tmo` adder moved off the `adv` critical path; the UART timing reference moved from `src/` to `test/uart_tx_ref.v`. Decided 2026-10-15: `core-v0` and `core-v0.1` merged into `main`.)
 
 The README-as-evidence-ledger plan (plan A) and plan C are scheduled in `PLAN.md` section 3.
 

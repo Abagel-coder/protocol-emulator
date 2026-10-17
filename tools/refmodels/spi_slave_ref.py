@@ -10,7 +10,10 @@ Tolerances (from the nominal period P = clk_hz / sck_hz, H = P // 2; never from 
     CS_n's fall, between the bytes of the transaction and at CS_n's rise;
   - first edge >= H - 2 cycles after CS_n falls and in the leading direction; last edge >= H - 2 before CS_n rises;
   - CS_n stays high >= H - 2 cycles between a rise and the next fall;
-  - edge-to-edge within a byte: H +- 1 cycles; between bytes >= H - 1 with SCK idle;
+  - edge-to-edge within a byte: H +- 1 cycles; between bytes >= H - 1 with SCK idle. A slower SCK
+    is legal SPI (a slave only needs the edges no faster than its maximum), so the upper bound is a
+    choice of this checker, not of the protocol: it is what makes the in-suite sentinel `HALF 27`
+    (an 8 % slow SCK) decisive, by one cycle on every edge; `HALF 26` (4 % slow) is accepted;
   - MOSI unchanged from P // 4 cycles before each sampling edge to P // 4 after it;
   - a transaction holds a multiple of 16 edges, at least 16 (finish() flags one with no edges), and
     CS_n rises before the run ends (finish() flags a transaction still open).

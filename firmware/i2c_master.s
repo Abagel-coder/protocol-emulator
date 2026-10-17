@@ -3,11 +3,15 @@
 ; (for a read, data bit 0 = 1 answers the byte with NACK). One result per command:
 ; {STRETCHED[10], TIMEOUT[9], NACK[8], data[7:0]}. Computed for 50 MHz; the quarter-period grid
 ; below gives tLOW = tHIGH = 2Q, tSU;STA = tHD;STA = tSU;STO = tBUF = 2Q, tHD;DAT = tSU;DAT = Q.
-; Measured period 4Q + 12 = 524 cycles = 10.48 us (95.4 kHz), not 4Q: the grid re-anchors at the
-; observed SCL rise, about 12 cycles after the release deadline (pin write, input synchroniser,
-; WAITP), so tHIGH = 2Q + 10 and tLOW = 2Q + 2.
+; Measured period 4Q + 11 = 523 cycles = 10.46 us (95.6 kHz), not 4Q: the grid re-anchors at the
+; observed SCL rise, about 11 cycles after the release deadline (pin write, input synchroniser,
+; WAITP), so tHIGH = 2Q + 9 and tLOW = 2Q + 2; a bus rise time adds to tLOW (period 573 cycles at
+; the 1 us standard-mode maximum).
 .equ PRESCALE 0       ; one tick = one cycle
-.equ Q        128     ; quarter of the SCL period in ticks = ceil(50e6 / 100e3 / 4) + 3 (measured period 10.48 us, under 100 kHz)
+.equ Q        128     ; quarter of the SCL period in ticks = ceil(50e6 / 100e3 / 4) + 3 (measured period 10.46 us, under 100 kHz)
+.equ TRISE    53      ; ticks a released SCL may take to read back high before it counts as a stretch =
+                      ; ceil(1000 ns * 50 MHz) = 50 (UM10204 standard-mode rise time tr max) + 3 (output
+                      ; register and the two-flop input synchroniser)
 main:
   WAITF RXV, R0
   BTO  main
@@ -25,6 +29,7 @@ main:
   CALL start
   NOP
 nostart:
+  LDI  R4, 0x00       ; (R4's low byte is not known here: scl_hi loads TRISE)
   LDIH R4, 0x04       ; READ
   BITT R2, R4
   BZ   write
@@ -64,8 +69,9 @@ abort:                ; SCL held low past the timeout: release both lines, repor
   NOP
 scl_hi:               ; release SCL, flag a stretch, wait for SCL high, R1 = the rise
   OE   0, 0x02
-  DELAY 3             ; released level reaches the synchronised input 3 cycles after the OE; read it 5 after
-  BPIN UIO, 1, 1, sclok
+  LDI  R4, TRISE      ; a bus with the slowest legal rise reads back high within TRISE ticks:
+  WAITP UIO, 1, HIGH, R4  ; SCL still low after that is a slave stretching
+  BNTO sclok
   NOP
   LDI  R4, 0x00
   LDIH R4, 0x04       ; STRETCHED

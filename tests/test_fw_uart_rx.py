@@ -18,6 +18,7 @@ CASES = {
     "framing":   [Frame(0x12, stop_low=True), Frame(0x34)],
     "glitch":    [Frame(0, glitch=100), Frame(0x5A)],
     "long_idle": [Frame(0x01, gap=140_000), Frame(0x02)],   # 70,000 ticks: the 65,535-tick WAITP times out once and rearms
+    "break":     [Frame(0, brk=20_000), Frame(0x5A)],        # 46 bits low: one framing-error word, then the next frame intact
 }
 MUTANT_BIT = ("BIT      217", "BIT      210")   # the in-suite sentinel: 3 % fast -> probe frames must fail
 CPB = CLK_HZ / BAUD                     # cycles per bit, 434.027...
@@ -96,6 +97,22 @@ def test_uart_ref_options_shape():
         Frame(0x01, baud_error=0.04, probe=True)
 
 
+def test_uart_ref_break_shape():
+    """A break: the line low for brk cycles from the end of the gap, then idle; exactly one 0x100
+    expected in the window measured from the break's start as if it were a start edge."""
+    ref = UartRxRef(CLK_HZ, BAUD); ref.schedule([Frame(0, brk=5000), Frame(0x5A)], lead_in=10)
+    start = int(10 + 2 * CPB)
+    assert ref.line[:start] == [1] * start and ref.line[start:start + 5000] == [0] * 5000
+    assert set(ref.line[start + 5000:int(start + 5000 + 2 * CPB)]) == {1}
+    s1, s2 = int(10 + 2 * CPB + 9.5 * CPB), int(10 + 2 * CPB + 5000 + 2 * CPB + 9.5 * CPB)
+    assert ref.expected == [(0x100, s1 - TOL, s1 + TOL + PUSH_SLACK), (0x5A, s2 - TOL, s2 + TOL + PUSH_SLACK)]
+    ref.schedule(CASES["break"]); assert [w for w, _, _ in ref.expected] == [0x100, 0x5A]
+    with pytest.raises(ValueError, match="at least one frame"):
+        ref.schedule([Frame(0, brk=int(10 * CPB))])
+    with pytest.raises(ValueError):
+        Frame(0x01, brk=5000)
+
+
 def test_uart_ref_check_rejects_wrong_word_count_value_and_time():
     ref = UartRxRef(CLK_HZ, BAUD); ref.schedule([Frame(0x55)])
     (word, lo, hi), = ref.expected
@@ -118,6 +135,17 @@ def run_case(frames, text=None):
 @pytest.mark.parametrize("name", sorted(CASES))
 def test_uart_rx_firmware_matches_reference(name):
     errors, _ = run_case(CASES[name]); assert errors == [], errors
+
+# the idle wait (line high before looking for a start bit) removed: the reviewer's mutant U-new
+IDLE_WAIT = ("  WAITP UI, 0, HIGH, R0   ; idle line first (also waits out a break after a framing error); timeout rearms\n"
+             "  BTO  frame\n", "  NOP\n  NOP\n")
+
+def test_uart_rx_break_fails_without_the_idle_wait():
+    """The break case is not vacuous: without the idle wait the rest of the break is read as more
+    frames (more 0x100 words, then a corrupt one), so the push count is wrong."""
+    src = (FIRMWARE / "uart_rx.s").read_text(); assert src.count(IDLE_WAIT[0]) == 1
+    errors, pushes = run_case(CASES["break"], src.replace(*IDLE_WAIT, 1))
+    assert errors and "expected 2 pushes" in errors[0] and len(pushes) > 2, (errors, pushes)
 
 def test_uart_rx_sentinel_mutant_is_rejected():
     src = (FIRMWARE / "uart_rx.s").read_text(); assert MUTANT_BIT[0] in src

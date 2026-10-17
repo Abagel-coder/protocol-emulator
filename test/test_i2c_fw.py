@@ -1,9 +1,12 @@
 """firmware/i2c_master.s on the full chip RTL (test/tb.v, through its pins) against the reference
 I2C slave and standard-mode checker tools/refmodels/i2c_slave_ref.py, which also computes the
 wired-AND bus the chip's uio_in is driven with: the same CASES as the oracle suite
-tests/test_fw_i2c.py, plus its in-suite sentinel mutant (Q 96 must be rejected). The commands go in
-over the host port (PUSH_FIFO) while a drain task reads the results back (POP_FIFO), and every case
-checks that the drained words equal the pushes monitored on the core's push strobe."""
+tests/test_fw_i2c.py, plus its in-suite sentinel mutant (Q 96 must be rejected). Each case runs
+with the bus rise time its slave sets (rise_time: 50 cycles, the 1 us standard-mode maximum;
+stretch: 3) and an ideal pull-up otherwise; the oracle suite also runs every case at rise 3. The
+commands go in over the host port (PUSH_FIFO) while a drain task reads the results back
+(POP_FIFO), and every case checks that the drained words equal the pushes monitored on the core's
+push strobe."""
 import cocotb
 from cocotb.triggers import ClockCycles
 from tests.test_fw_i2c import CASES, MUTANT_Q, cycle_budget, model_for, case_errors

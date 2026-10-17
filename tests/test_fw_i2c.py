@@ -27,7 +27,7 @@ CASES = {  # slave: I2cSlaveRef kwargs; words: host commands; expect: result wor
     "write_restart_read": case({"read_data": [0x7E]}, [i2c_cmd(wr(ADDR), start=True), i2c_cmd(0x10), i2c_cmd(rd(ADDR), start=True), i2c_cmd(read=True, nack=True, stop=True)], [wr(ADDR), 0x10, rd(ADDR), 0x7E]),
     "addr_nack": case({}, [i2c_cmd(wr(0x51), start=True, stop=True)], [wr(0x51) | NACK]),
     "data_nack": case({"nack_data_after": 1}, [i2c_cmd(wr(ADDR), start=True), i2c_cmd(0x01), i2c_cmd(0x02, stop=True)], [wr(ADDR), 0x01 | NACK, 0x02 | NACK]),
-    "stretch": case({"stretch_after_byte": (0, 1000)}, [i2c_cmd(wr(ADDR), start=True), i2c_cmd(0x5A), i2c_cmd(0x3C, stop=True)], [wr(ADDR), 0x5A | STRETCHED, 0x3C]),
+    "stretch": case({"stretch_after_byte": (0, 1000), "rise_cycles": 3}, [i2c_cmd(wr(ADDR), start=True), i2c_cmd(0x5A), i2c_cmd(0x3C, stop=True)], [wr(ADDR), 0x5A | STRETCHED, 0x3C]),
     "read_stretch": case({"read_data": [0x11, 0x22], "stretch_after_byte": (0, 1000)},
                          [i2c_cmd(rd(ADDR), start=True), i2c_cmd(read=True), i2c_cmd(read=True, nack=True, stop=True)], [rd(ADDR), 0x11 | STRETCHED, 0x22]),
     "stop_stretch": case({"stretch_after_byte": (1, 1000)}, [i2c_cmd(wr(ADDR), start=True), i2c_cmd(0x5A, stop=True)], [wr(ADDR), 0x5A | STRETCHED]),
@@ -35,19 +35,26 @@ CASES = {  # slave: I2cSlaveRef kwargs; words: host commands; expect: result wor
                     [wr(ADDR), 0x5A | TIMEOUT, wr(ADDR)], at=[0, 0, 90_000]),
     "start_timeout": case({"stretch_after_byte": (0, 80_000)}, [i2c_cmd(wr(ADDR), start=True), i2c_cmd(0xA1, start=True), i2c_cmd(wr(ADDR), start=True, stop=True)],
                           [wr(ADDR), 0xA1 | TIMEOUT, wr(ADDR)], at=[0, 0, 90_000]),
+    # the standard-mode maximum rise time (1 us = 50 cycles) on both lines, and no slave stretching:
+    # no result may carry STRETCHED
+    "rise_time": case({"rise_cycles": 50}, [i2c_cmd(wr(ADDR), start=True), i2c_cmd(0xA5), i2c_cmd(0x3C, stop=True)], [wr(ADDR), 0xA5, 0x3C]),
 }
-SCL_RELEASE_LAG = 10   # cycles: SCL must be high on the bus this soon after the slave stops stretching
+SCL_RELEASE_LAG = 10   # cycles beyond the bus rise time: SCL must be high on the bus this soon after the slave stops stretching
+RISES = (0, 3)         # every case without its own rise_cycles runs on the oracle with each of these
+ORACLE_RUNS = [(n, r) for n in CASES for r in RISES if r == RISES[0] or "rise_cycles" not in CASES[n]["slave"]]
 MUTANT_Q = ("Q        128", "Q        96")
 
 
 def cycle_budget(c):
-    """6,000 cycles per command plus one more 6,000 (a byte is nine 10.48 us bits, about 4,740
-    cycles; a command with START and STOP takes about 6,300), plus 100,000 for the timeout cases
+    """6,000 cycles per command plus one more 6,000 (a byte is nine 10.46 us bits, about 4,730
+    cycles, 5,180 with the 1 us rise of rise_time, whose last result lands at about 17,140 of
+    24,000; a command with START and STOP takes about 6,300), plus 100,000 for the timeout cases
     (80,000-cycle stretch, third word at 90,000)."""
     return 6000 * (len(c["words"]) + 1) + (100_000 if c["slave"].get("stretch_after_byte", (0, 0))[1] > 65_535 else 0)
 
-def model_for(c):
-    return I2cSlaveRef(CLK_HZ, ADDR, **c["slave"])
+def model_for(c, rise=0):
+    """The case's slave; `rise` is its rise_cycles unless the case sets its own."""
+    return I2cSlaveRef(CLK_HZ, ADDR, **{"rise_cycles": rise, **c["slave"]})
 
 def kinds(ref): return [e[0] for e in ref.events]
 def byte_events(ref): return [e for e in ref.events if e[0] == "BYTE"]
@@ -61,7 +68,9 @@ def case_errors(name, ref, pushes):
     ks, bs = kinds(ref), byte_events(ref)
     def want(cond, what):
         if not cond: errors.append("%s: events %s, written %s" % (what, ref.events, ref.written))
-    if name == "write2":
+    want(not any(w & STRETCHED for w in got) or "stretch" in name,
+         "STRETCHED only where the slave stretches (rise_cycles %d)" % ref.rise_cycles)
+    if name in ("write2", "rise_time"):
         want(ref.written == [0xA5, 0x3C], "written")
         want(ks == ["START", "BYTE", "BYTE", "BYTE", "STOP"], "START, 3 bytes, STOP")
         want([(b[2], b[3], b[4]) for b in bs] == [(wr(ADDR), True, "W"), (0xA5, True, "W"), (0x3C, True, "W")], "bytes")
@@ -94,10 +103,10 @@ def case_errors(name, ref, pushes):
         lows = [v for _, v in ref.measured["tLOW"]]
         want(max(lows) >= sab[1], "the stretched low is on the bus (max tLOW %d)" % max(lows))
         # the master has released SCL by the time the slave lets go (after its own release, or its
-        # abort on a timeout): SCL rises on the bus within SCL_RELEASE_LAG cycles
-        lags = ref.measured["scl_release_lag"]
-        want(len(lags) == 1 and lags[0][1] is not None and lags[0][1] <= SCL_RELEASE_LAG,
-             "SCL high within %d cycles of the slave's release (release, lag: %s)" % (SCL_RELEASE_LAG, lags))
+        # abort on a timeout): SCL rises on the bus within the rise time + SCL_RELEASE_LAG cycles
+        lags = ref.measured["scl_release_lag"]; lim = ref.rise_cycles + SCL_RELEASE_LAG
+        want(len(lags) == 1 and lags[0][1] is not None and lags[0][1] <= lim,
+             "SCL high within %d cycles of the slave's release (release, lag: %s)" % (lim, lags))
     return errors
 
 
@@ -234,19 +243,43 @@ def test_i2c_ref_rejects_a_short_stop_setup():
 
 # ---- the firmware on the oracle -------------------------------------------------------------
 
-def run_case(name, text=None):
+def run_case(name, text=None, rise=0):
     c = CASES[name]; at = c["at"]
     words, equs = load("i2c_master.s", text)
-    ref = model_for(c)
+    ref = model_for(c, rise)
     pushes = run_model(words, equs["PRESCALE"], ref, cycle_budget(c), host_words=c["words"],
                        host_at=(lambda i: at[i]) if at else None)
     ref.finish()
     return ref, pushes
 
-@pytest.mark.parametrize("name", list(CASES))
-def test_i2c_master_firmware_matches_reference(name):
-    ref, pushes = run_case(name)
+@pytest.mark.parametrize("name,rise", ORACLE_RUNS, ids=["%s-rise%d" % nr for nr in ORACLE_RUNS])
+def test_i2c_master_firmware_matches_reference(name, rise):
+    ref, pushes = run_case(name, rise=rise)
     errors = case_errors(name, ref, pushes); assert errors == [], errors
+
+# scl_hi before the rise-time fix: it read SCL back once, 5 cycles after releasing it, and called
+# anything still low a stretch, which leaves a real (RC) bus 2 cycles to rise
+SCL_HI_OLD = ("""  OE   0, 0x02
+  LDI  R4, TRISE      ; a bus with the slowest legal rise reads back high within TRISE ticks:
+  WAITP UIO, 1, HIGH, R4  ; SCL still low after that is a slave stretching
+  BNTO sclok
+  NOP
+""", """  OE   0, 0x02
+  DELAY 3
+  BPIN UIO, 1, 1, sclok
+  NOP
+""")
+
+def test_i2c_master_single_readback_flags_a_rise_as_a_stretch():
+    """The rise-time runs are not vacuous: the pre-fix scl_hi passes every case at rise 0 but sets
+    STRETCHED on every result at rise 3 (60 ns); the fixed one (TRISE) passes both."""
+    src = (FIRMWARE / "i2c_master.s").read_text(); assert src.count(SCL_HI_OLD[0]) == 1
+    old = src.replace(*SCL_HI_OLD)
+    for name in ("write2", "addr_nack", "read2"):
+        ref, pushes = run_case(name, old, rise=0); assert case_errors(name, ref, pushes) == []
+        ref, pushes = run_case(name, old, rise=3)
+        assert pushes and all(w & STRETCHED for _, w in pushes), (name, pushes)
+        assert ref.violations == [], ref.violations                  # the bus timing itself stays legal
 
 def test_i2c_master_stop_then_start_meets_tbuf():
     """Added beyond the plan: no case has a STOP followed by a START (repeated STARTs and the

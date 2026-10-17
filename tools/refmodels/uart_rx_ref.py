@@ -13,6 +13,15 @@ receiver gets a chance to reject it through its false-start check. schedule() th
 ValueError when a probe frame is followed by a frame whose gap is below bit/4 cycles (the default
 gap, 2 bits, is fine).
 
+A break (Frame(0, brk=n)) holds the line low for n cycles, then idle. A receiver sees it as one
+frame whose data bits and stop bit all read low, so exactly one word is expected, 0x100 (data 0,
+framing error), in the normal window measured from the break's first low cycle as if it were a
+frame's start edge: [start + 9.5 bits - bit/8, start + 9.5 bits + bit/8 + PUSH_SLACK], about
+cycles 4,069 to 4,209 after the break starts at 115200 baud from 50 MHz. Nothing else may be pushed
+until the line has gone high again (a receiver that does not wait for idle reads the rest of the
+break as more frames). n must be at least one frame (10 bits): any receiver inside the window
+samples the stop bit at most 9.5 bits + bit/8 after the start, so every sample then reads low.
+
 Positions are kept in floating point (cycles since the model's first step) and converted with
 int() at each boundary, so a 434.03-cycle bit never accumulates rounding drift. The model is driven
 through step(uo, uio_out, uio_oe) -> (ui, uio_in): it ignores the chip's outputs and drives the line
@@ -22,16 +31,19 @@ PUSH_SLACK = 32          # cycles allowed from the ideal stop sample (+bit/8) to
 
 
 class Frame:
-    def __init__(self, byte, baud_error=0.0, probe=False, stop_low=False, glitch=None, gap=None):
+    def __init__(self, byte, baud_error=0.0, probe=False, stop_low=False, glitch=None, gap=None, brk=None):
         # glitch: a low pulse of that many cycles instead of a frame (no word expected; byte is
-        # ignored); gap: idle cycles before the frame (default 2 bits); probe and baud_error are
-        # not combined.
+        # ignored); brk: a break, the line low for that many cycles instead of a frame (one 0x100
+        # word expected; byte must be 0); gap: idle cycles before the frame (default 2 bits);
+        # probe and baud_error are not combined.
         if probe and baud_error:
             raise ValueError("probe frames are at the nominal baud rate (baud_error must be 0)")
         if not 0 <= byte <= 0xFF:
             raise ValueError("byte must be 0..255")
         self.byte, self.baud_error, self.probe, self.stop_low = byte, baud_error, probe, stop_low
-        self.glitch, self.gap = glitch, gap
+        if brk is not None and (byte or probe or baud_error or stop_low or glitch is not None):
+            raise ValueError("a break is Frame(0, brk=n) with no other option but gap")
+        self.glitch, self.gap, self.brk = glitch, gap, brk
 
 
 class UartRxRef:
@@ -61,6 +73,12 @@ class UartRxRef:
             fill(pos, 1)                                               # idle gap
             if f.glitch is not None:
                 pos += f.glitch; fill(pos, 0); continue                # a low pulse, no frame
+            if f.brk is not None:                                      # a break: one framing-error word
+                if f.brk < 10 * self.cpb:
+                    raise ValueError("a break must hold the line low for at least one frame (10 bits)")
+                stop = int(pos + 9.5 * self.cpb)
+                expected.append((0x100, stop - self.tol, stop + self.tol + PUSH_SLACK))
+                pos += f.brk; fill(pos, 0); continue
             bit = self.clk_hz / (self.baud * (1.0 + f.baud_error))     # this frame's own bit time
             edge = pos
             bits = [0] + [(f.byte >> i) & 1 for i in range(8)] + [0 if f.stop_low else 1]

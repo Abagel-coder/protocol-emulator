@@ -22,8 +22,22 @@ jobs:
         with:
           pdk: ihp-sg13cmos5l
 
+  # Separate job so a failing gate does not skip precheck, gl_test and viewer.
+  metrics_gate:
+    needs: gds
+    runs-on: ubuntu-24.04
+    steps:
+      - name: checkout repo
+        uses: actions/checkout@v6
+
+      - name: Download GDS logs
+        uses: actions/download-artifact@v7
+        with:
+          name: GDS_logs
+          path: gds_logs
+
       - name: Metrics gate (setup/hold slack, route DRC, antenna, LVS)
-        run: python3 test/check_metrics.py runs/wokwi/final/metrics.json
+        run: python3 test/check_metrics.py gds_logs/runs/wokwi/final/metrics.json
 
   precheck:
     needs: gds

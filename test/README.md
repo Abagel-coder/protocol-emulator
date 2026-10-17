@@ -1,12 +1,13 @@
 # cocotb suites
 
-Five suites, one Makefile each, all run by the GitHub `test` workflow (`make -B` in this directory; `make` exits 0 even when a test fails, so check the `FAIL=0` summary or grep `results.xml` for `failure`):
+Six suites, one Makefile each, all run by the GitHub `test` workflow (`make -B` in this directory; `make` exits 0 even when a test fails, so check the `FAIL=0` summary or grep `results.xml` for `failure`):
 
 - `Makefile` (`test_host.py`, `tb.v`): the whole chip through its Tiny Tapeout pins -- SPI loader protocol, RUN pin, status/FIFO/GPIO commands, datasheet byte sequences; pin-only, so it also runs at gate level (`GATES=yes` with `gate_level_netlist.v`, which the `gds` workflow does).
 - `Makefile.core` (`test_core.py`, `test_diff.py`, `tb_core.v`): directed core tests with backdoor instruction-memory load (`imem_load.py`), plus the differential fuzzer against `tools/sim.py` (`DIFF_PROGRAMS`, default 200).
 - `Makefile.blocks` (`test_blocks.py`, `tb_blocks.v`): timebase, GPIO and instruction-memory (`pe_imem`, both `IMPL` branches side by side) blocks on their own.
 - `Makefile.uartfw` (`test_uart_fw.py`, `tb_uartfw.v`, `uart_tx_ref.v`): `firmware/uart_tx.s` on the core versus the fixed transmitter `uart_tx_ref.v` (a test-only reference kept here in `test/`, not part of the chip), cycle for cycle.
 - `Makefile.uartrx` (`test_uart_rx_fw.py`, `tb.v`, the shared harness `fw_harness.py`): `firmware/uart_rx.s` on the whole chip, loaded and read back over the host SPI pins, against the Python 8N1 reference receiver `tools/refmodels/uart_rx_ref.py` (frame timing window, probe frames, +-4 % baud, framing error, glitch, long idle) plus a sentinel test that the reference rejects a 3 % fast `BIT`. The same cases run on the oracle in `tests/test_fw_uart_rx.py`.
+- `Makefile.spifw` (`test_spi_fw.py`, `tb.v`, `fw_harness.py`): `firmware/spi_master.s` on the whole chip, commands pushed and results read back over the host SPI pins, against the Python reference SPI slave `tools/refmodels/spi_slave_ref.py` (modes 0-3 with a MISO sampling window, a mode change between transactions, a single byte, late commands; CS_n idle level, lead/lag, exact edge intervals, MOSI setup/hold) plus a sentinel test that the reference rejects an 8 % slow `HALF`. The same cases run on the oracle in `tests/test_fw_spi.py`.
 
 The instruction memory is an IHP SRAM macro. Its two PDK simulation models are vendored in `models/` (source and PDK commit in `models/README.md`); every Makefile compiles them with `-DFUNCTIONAL`, RTL and gate level alike (the netlist keeps the macro as a black box). `imem_load.py`'s `load_imem(dut.u_imem, words)` deposits a program straight into the model's array (`u_imem.g_macro.u_sram.i_SRAM_1P_behavioral_bm_bist.memory`) and zero-fills the rest of the 512 words; the host suite loads over SPI instead.
 

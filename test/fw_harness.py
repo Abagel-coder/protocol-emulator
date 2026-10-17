@@ -7,7 +7,7 @@ covers the real host path."""
 import os
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles, FallingEdge
+from cocotb.triggers import ClockCycles, FallingEdge, Lock
 from tools.asm import assemble, constants
 from tools.host import (SpiMaster, encode_write_imem, encode_write_ctrl, encode_write_prescale,
                         CMD_PUSH_FIFO, CMD_POP_FIFO, CMD_READ_STATUS)
@@ -21,9 +21,13 @@ class PinBus:
 
 class HostPort(SpiMaster):
     """SpiMaster that writes the three host lines through the PinBus (half period 200 ns: SCK at
-    clk/20, within the port's clk/16 limit), leaving ui[3:0] to the model loop."""
-    def __init__(self, bus): self.bus = bus; super().__init__(bus.dut, half_period_ns=200)
+    clk/20, within the port's clk/16 limit), leaving ui[3:0] to the model loop. Every transfer
+    holds a lock, so coroutines sharing the port (host_push alongside drain) never interleave
+    their bit sequences on ui_in."""
+    def __init__(self, bus): self.bus = bus; self.lock = Lock(); super().__init__(bus.dut, half_period_ns=200)
     def _drive(self, sck, mosi, cs_n): self.bus.host = (sck << 4) | (mosi << 5) | (cs_n << 6); self.bus.apply()
+    async def xfer(self, tx):
+        async with self.lock: return await super().xfer(tx)
 
 def firmware_text(name):
     with open(os.path.join(FIRMWARE, name)) as f: return f.read()

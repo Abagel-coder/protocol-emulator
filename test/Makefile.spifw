@@ -1,0 +1,39 @@
+# Makefile.spifw
+# See https://docs.cocotb.org/en/stable/quickstart.html for more info
+#
+# Copy of test/Makefile.uartrx: the same seven core sources from src/ and the SRAM models, the
+# plain chip testbench tb.v (no Verilog reference: this suite runs firmware/spi_master.s on the chip
+# against the Python reference SPI slave tools/refmodels/spi_slave_ref.py, through the shared
+# harness test/fw_harness.py), and test_spi_fw instead of test_uart_rx_fw.
+
+# defaults
+SIM ?= icarus
+FST ?= -fst # Use more efficient FST format
+TOPLEVEL_LANG ?= verilog
+SRC_DIR = $(PWD)/../src
+PROJECT_SOURCES = project.v pe_timebase.v pe_gpio.v pe_imem.v pe_fifo.v pe_core.v pe_host_spi.v
+
+# Make tools.* importable from cocotb test modules:
+export PYTHONPATH := $(PWD)/..
+
+# RTL simulation only: there is no gate-level (GATES=yes) variant of this Makefile.
+# Gate-level simulation is test/Makefile (test_host), which drives only the top-level pins.
+SIM_BUILD				= sim_build/rtl
+VERILOG_SOURCES += $(addprefix $(SRC_DIR)/,$(PROJECT_SOURCES))
+# The instruction memory is an IHP SRAM macro; its simulation model (test/models, vendored from the
+# PDK) only instantiates the behavioural core under FUNCTIONAL.
+VERILOG_SOURCES += $(PWD)/models/RM_IHPSG13_1P_core_behavioral_bm_bist.v $(PWD)/models/RM_IHPSG13_1P_512x16_c2_bm_bist.v
+COMPILE_ARGS    += -DFUNCTIONAL
+
+# Allow sharing configuration between design and testbench via `include`:
+COMPILE_ARGS 		+= -I$(SRC_DIR)
+
+# Include the testbench (the reference model is Python, tools/refmodels/spi_slave_ref.py):
+VERILOG_SOURCES += $(PWD)/tb.v
+TOPLEVEL = tb
+
+# List test modules to run, separated by commas and without the .py suffix:
+COCOTB_TEST_MODULES = test_spi_fw
+
+# include cocotb's make rules to take care of the simulator setup
+include $(shell cocotb-config --makefiles)/Makefile.sim

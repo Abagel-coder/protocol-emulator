@@ -24,34 +24,54 @@ jobs:
         run: pip install -r test/requirements.txt
 
       # Each suite has its own Makefile and would otherwise overwrite results.xml; give each its
-      # own results file (COCOTB_RESULTS_FILE) and check every one for a <failure> element,
-      # because make returns success even when a test fails. The Makefiles export
+      # own results file (COCOTB_RESULTS_FILE) and check that every one exists, is non-empty,
+      # holds the suite's expected number of testcases and has no <failure> element, because make
+      # returns success even when a test fails (and a missing or empty file has no failure in it).
+      # Update the count when a suite gains or loses a test. The Makefiles export
       # PYTHONPATH=$(PWD)/.. themselves so the tests can import tools/ (Makefile.core,
-      # Makefile.uartfw, Makefile).
+      # Makefile.uartfw, Makefile.uartrx, Makefile.spifw, Makefile.i2cfw, Makefile).
       - name: Host / top-level tests (test/Makefile, test_host)
         run: |
           cd test
           make clean
           make
-          ! grep failure results.xml
+          test -s results.xml && [ "$(grep -c '<testcase' results.xml)" -eq 22 ] && ! grep failure results.xml
 
       - name: Core directed tests + differential fuzzer (test/Makefile.core)
         run: |
           cd test
           COCOTB_RESULTS_FILE=results_core.xml make -B -f Makefile.core
-          ! grep failure results_core.xml
+          test -s results_core.xml && [ "$(grep -c '<testcase' results_core.xml)" -eq 21 ] && ! grep failure results_core.xml
 
       - name: Timebase / GPIO block tests (test/Makefile.blocks)
         run: |
           cd test
           COCOTB_RESULTS_FILE=results_blocks.xml make -B -f Makefile.blocks
-          ! grep failure results_blocks.xml
+          test -s results_blocks.xml && [ "$(grep -c '<testcase' results_blocks.xml)" -eq 7 ] && ! grep failure results_blocks.xml
 
       - name: UART firmware equivalence (test/Makefile.uartfw)
         run: |
           cd test
           COCOTB_RESULTS_FILE=results_uartfw.xml make -B -f Makefile.uartfw
-          ! grep failure results_uartfw.xml
+          test -s results_uartfw.xml && [ "$(grep -c '<testcase' results_uartfw.xml)" -eq 1 ] && ! grep failure results_uartfw.xml
+
+      - name: UART RX firmware vs reference receiver (test/Makefile.uartrx)
+        run: |
+          cd test
+          COCOTB_RESULTS_FILE=results_uartrx.xml make -B -f Makefile.uartrx
+          test -s results_uartrx.xml && [ "$(grep -c '<testcase' results_uartrx.xml)" -eq 9 ] && ! grep failure results_uartrx.xml
+
+      - name: SPI master firmware vs reference slave (test/Makefile.spifw)
+        run: |
+          cd test
+          COCOTB_RESULTS_FILE=results_spifw.xml make -B -f Makefile.spifw
+          test -s results_spifw.xml && [ "$(grep -c '<testcase' results_spifw.xml)" -eq 8 ] && ! grep failure results_spifw.xml
+
+      - name: I2C master firmware vs reference slave (test/Makefile.i2cfw)
+        run: |
+          cd test
+          COCOTB_RESULTS_FILE=results_i2cfw.xml make -B -f Makefile.i2cfw
+          test -s results_i2cfw.xml && [ "$(grep -c '<testcase' results_i2cfw.xml)" -eq 12 ] && ! grep failure results_i2cfw.xml
 
       - name: Test Summary
         uses: test-summary/action@v2.4

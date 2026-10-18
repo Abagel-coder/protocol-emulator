@@ -68,6 +68,17 @@ def _int(tok, what):
     try: return int(tok.strip(), 0)
     except ValueError: raise AsmError("%s must be a number, got %r" % (what, tok.strip()))
 
+def _equ(args):
+    """Parse one `.equ` directive's arguments (`NAME VALUE` or `NAME, VALUE`) into (name, value).
+    Shared by assemble() and constants() so the two cannot drift."""
+    if len(args) == 1:
+        parts = args[0].split()
+        if len(parts) != 2: raise AsmError(".equ expects NAME VALUE or NAME, VALUE")
+        return parts[0], _int(parts[1], ".equ value")
+    if len(args) == 2:
+        return args[0].strip(), _int(args[1], ".equ value")
+    raise AsmError(".equ expects NAME VALUE or NAME, VALUE")
+
 def _org(args, pc, max_words):
     """Resolve an .org target (a numeric literal), checking it is a real, forward address."""
     new_pc = _int(_one_arg(".org", args), ".org address")
@@ -92,14 +103,7 @@ def assemble(text, max_words=IMEM_WORDS):
                 if label in labels: raise AsmError("duplicate label %r" % label)
                 labels[label] = pc
             if op == ".EQU":
-                if len(args) == 1:
-                    parts = args[0].split()
-                    if len(parts) != 2: raise AsmError(".equ expects NAME VALUE or NAME, VALUE")
-                    equs[parts[0]] = _int(parts[1], ".equ value")
-                elif len(args) == 2:
-                    equs[args[0].strip()] = _int(args[1], ".equ value")
-                else:
-                    raise AsmError(".equ expects NAME VALUE or NAME, VALUE")
+                name, value = _equ(args); equs[name] = value
             elif op == ".ORG":
                 pc = _org(args, pc, max_words)
             elif op != "":
@@ -138,6 +142,18 @@ def assemble(text, max_words=IMEM_WORDS):
 def assemble_file(path, max_words=IMEM_WORDS):
     with open(path) as f:
         return assemble(f.read(), max_words=max_words)
+
+def constants(text):
+    """The `.equ` table of `text` (name -> value), from pass 1 alone: lets a test read a firmware's
+    declared assumptions (e.g. PRESCALE) without assembling it. Malformed `.equ` lines raise AsmError."""
+    equs = {}
+    for n, _label, op, args in _parse(text):
+        if op != ".EQU": continue
+        try:
+            name, value = _equ(args); equs[name] = value
+        except AsmError as e:
+            raise AsmError("line %d: %s" % (n, e)) from None
+    return equs
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])

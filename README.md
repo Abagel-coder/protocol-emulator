@@ -17,7 +17,8 @@ An open-source programmable protocol-emulator CPU for IHP 130 nm SG13CMOS5L via 
 | 2026-09-15 | Repo scaffolded from the `cmos5l` template; fixed 8N1 UART transmitter (then in `src/`, now the test-only reference `test/uart_tx_ref.v`) with cycle-exact cocotb tests (3/3 passing locally on Icarus) as the warm-up block; local toolchain installed and verified |
 | 2026-09-18 | **Core v0 complete and hardened.** ISA (`isa/isa.yaml`) generates the assembler, Python simulator and Verilog decode constants; `pe_core`/`pe_timebase`/`pe_gpio`/`pe_fifo`/`pe_imem_ff` wired to a host SPI loader (`pe_host_spi`) on the Tiny Tapeout pins; differential fuzzer (RTL vs Python model) and a cycle-accurate UART-firmware equivalence test both pass; core properties (deadline exactness, static timing, reset safety, RUN synchronisation) proved with SymbiYosys; hardened for IHP SG13CMOS5L via the GitHub `gds` flow, gate-level simulation green. Next: lanes (pin engines) |
 | 2026-10-16 | **SRAM instruction memory on branch `sram-imem` (not merged): first complete flow, results not final (superseded by the 2026-10-17 row).** 512 x 16 IHP macro `RM_IHPSG13_1P_512x16_c2_bm_bist` in place of the 64-word flip-flop memory; `WRITE_IMEM` words that arrive while the core is active are dropped and reported in `READ_STATUS` bit 5. GitHub `gds` run [#38841114120](https://github.com/Abagel-coder/protocol-emulator/actions/runs/38841114120) (commit `10a9583`): power grid connected on VPWR and VGND, LVS and antenna checks pass, hold clean, 1 macro + 5,535 standard cells; setup violations in the slow corner and Magic DRC errors around the macro, and the job stopped at the artifact upload (storage quota), so the metrics gate, precheck and gate-level run did not execute. Both are pending owner decisions (HANDOFF.md). The numbers of that run are not in the Results table; the green run is below. |
-| 2026-10-17 | **SRAM harden green; merged into `main` the same day (`658d152`).** GitHub `gds` run [#39014059324](https://github.com/Abagel-coder/protocol-emulator/actions/runs/39014059324) on commit `4badf9e` (512 x 16 SRAM macro instruction memory, per-register precompute of the `WAITT` compare, `SYNTH_STRATEGY` "DELAY 4"): the `gds`, `metrics_gate`, `precheck` (KLayout DRC) and `gl_test` jobs pass; slow-corner setup slack +1.91 ns at 50 MHz, hold +0.120 ns, routing DRC 0, antenna 0, LVS 0. The `viewer` job failed because GitHub Pages was unpublished when the repository went public on 2026-10-16 (the owner re-enables Pages). The label "core v1.0" is provisional until the owner names the release; the merge of `sram-imem` is the owner's decision. Results row below. |
+| 2026-10-17 | **SRAM harden green; merged into `main` the same day (`658d152`).** GitHub `gds` run [#39014059324](https://github.com/Abagel-coder/protocol-emulator/actions/runs/39014059324) on commit `4badf9e` (512 x 16 SRAM macro instruction memory, per-register precompute of the `WAITT` compare, `SYNTH_STRATEGY` "DELAY 4"): the `gds`, `metrics_gate`, `precheck` (KLayout DRC) and `gl_test` jobs pass; slow-corner setup slack +1.91 ns at 50 MHz, hold +0.120 ns, routing DRC 0, antenna 0, LVS 0. The `viewer` job failed because GitHub Pages was unpublished when the repository went public on 2026-10-16 (the owner re-enables Pages). The label "core v1.0" is provisional until the owner names the release. Results row below. |
+| 2026-10-17 | **Plan C (protocol firmware with independent reference models) on branch `protocol-fw`; merged into `main` on 2026-10-17.** UART receiver (115200 baud 8N1, `firmware/uart_rx.s`, 36 words), SPI master modes 0-3 (`firmware/spi_master.s`, 71 words) and I2C master with repeated START, ACK/NACK, clock stretching and a stuck-SCL timeout (`firmware/i2c_master.s`, 167 words; a slave is reported as stretching only if SCL is still low 1.06 us after the release, so a bus with the 1 us standard-mode rise time does not set STRETCHED, checked by a rise-time case). Each runs against a cycle-stepped reference model written from the protocol specification (`tools/refmodels/`), both on the Python oracle (pytest) and on the chip RTL through its pins (cocotb), with an in-suite mutant sentinel per protocol and a mutation table per task kept in `HANDOFF.md`. The branch changed no RTL (`src/`, `isa/`, `formal/`, `tools/sim.py`, `tools/host.py` identical to `sram-imem` `a850747`), so the merged chip is core v1.0 and its hardening numbers (row above) apply; the CI `test` and `tools` workflows were green on the branch (`008cf7f`, `18954a7`), and all three protocol suites pass on the merged tree, which includes core v1.0's `WAITT` timing change. The firmware is computed for 50 MHz, the clock the owner decided to keep on 2026-10-16. |
 
 ## Results
 
@@ -51,14 +52,25 @@ isa/        isa.yaml — the single source of truth for the ISA; generates the a
             checked against the ISA by the differential fuzzer, test/test_diff.py)
 tools/      asm.py (assembler), sim.py (Python reference model), host.py (host SPI
             loader-protocol encoders + cocotb SpiMaster), gen_isa.py, isa_defs.py
-tests/      pytest unit tests for tools/ (assembler, generator, simulator)
-firmware/   assembly programs (e.g. blink.s) assembled with tools/asm.py
+tools/refmodels/
+            spec-derived cycle-stepped protocol reference models (UART receiver, SPI
+            slave, I2C slave with the wired-AND bus), each with a step() method and a
+            list of timing violations; written from the protocol definitions, not from
+            the firmware
+tests/      pytest unit tests for tools/ (assembler, generator, simulator) and the
+            oracle-level firmware tests (fw_harness.py, test_fw_*.py: the firmware on
+            tools/sim.py against the reference models, also the case tables the cocotb
+            suites import)
+firmware/   assembly programs assembled with tools/asm.py: blink.s, uart_tx.s, and the
+            protocol firmware uart_rx.s, spi_master.s, i2c_master.s
 formal/     SymbiYosys proofs (core.sby) for core properties: deadline exactness,
             static timing, reset safety, RUN synchronisation
 test/       cocotb testbenches (tb*.v) and tests (test_*.py): Makefile (host/top level, RTL
             or gate-level with GATES=yes), Makefile.core (core + differential fuzzer),
             Makefile.blocks, Makefile.uartfw (RTL only -- their testbenches instantiate
-            sub-modules the flattened netlist no longer has)
+            sub-modules the flattened netlist no longer has), and Makefile.uartrx,
+            Makefile.spifw, Makefile.i2cfw (the protocol firmware on the whole chip through
+            its pins, with fw_harness.py; RTL only)
 docs/       datasheet text (info.md), generated ISA reference (isa.md), research,
             design specs
 scripts/    setup_env.sh — local toolchain bootstrap for macOS (Apple Silicon)
@@ -86,13 +98,16 @@ Tool tests (assembler, ISA generator, Python simulator) and the generator drift 
 .venv/bin/python tools/gen_isa.py --check
 ```
 
-RTL simulation — host SPI port (`test/Makefile`), core-only with the differential fuzzer (`test/Makefile.core`), timebase/GPIO blocks (`test/Makefile.blocks`), and the UART-firmware equivalence test (`test/Makefile.uartfw`); each line works on its own or pasted as a block:
+RTL simulation — host SPI port (`test/Makefile`), core-only with the differential fuzzer (`test/Makefile.core`), timebase/GPIO blocks (`test/Makefile.blocks`), and the UART-firmware equivalence test (`test/Makefile.uartfw`), and the three protocol-firmware suites (`test/Makefile.uartrx`, `Makefile.spifw`, `Makefile.i2cfw`); each line works on its own or pasted as a block:
 
 ```bash
 make -C test -B
 make -C test -B -f Makefile.core
 make -C test -B -f Makefile.blocks
 make -C test -B -f Makefile.uartfw
+make -C test -B -f Makefile.uartrx
+make -C test -B -f Makefile.spifw
+make -C test -B -f Makefile.i2cfw
 ```
 
 (`make` exits 0 even when a cocotb test fails; look for `FAIL=0` in the summary table, or grep `results.xml` for `failure` as CI does. `DIFF_PROGRAMS=25 make -C test -B -f Makefile.core` shortens the fuzzer from 200 programs to 25.)
@@ -122,8 +137,8 @@ The flow of record is the GitHub `gds` workflow (`TinyTapeout/tt-gds-action@ihp-
 
 Every workflow runs on every push (`.github/workflows/`). What each one actually executes:
 
-- `test` — the four cocotb suites on Icarus (Ubuntu's `iverilog`, cocotb 2.0.1 from `test/requirements.txt`): `test/Makefile` (host/top level, 22 tests), `test/Makefile.core` (19 directed core tests + the 200-program differential fuzzer against `tools/sim.py`, each program tiled 8 times over the 512 words), `test/Makefile.blocks` (7), `test/Makefile.uartfw` (1, cycle-exact UART-firmware equivalence); each suite's `results*.xml` is grepped for `failure`.
-- `tools` — `pytest -q` (assembler, generator, simulator, host encoders; 50 tests, pyyaml 6.0.3 / pytest 8.4.2 pinned), `tools/gen_isa.py --check` (the three generated files match `isa/isa.yaml`), and all five SymbiYosys tasks of `formal/core.sby` on OSS CAD Suite release 2026-09-15.
+- `test` — the seven cocotb suites on Icarus (Ubuntu's `iverilog`, cocotb 2.0.1 from `test/requirements.txt`): `test/Makefile` (host/top level, 22 tests), `test/Makefile.core` (20 directed core tests + the 200-program differential fuzzer against `tools/sim.py`, each program tiled 8 times over the 512 words; 21 tests), `test/Makefile.blocks` (7), `test/Makefile.uartfw` (1, cycle-exact UART-firmware equivalence), `test/Makefile.uartrx` (9, UART receiver firmware against the reference receiver), `test/Makefile.spifw` (8, SPI master modes 0-3 against the reference slave) and `test/Makefile.i2cfw` (12, I2C master against the reference slave and bus model); each suite's `results*.xml` must exist, be non-empty, hold exactly that many `<testcase>` elements and contain no `failure`.
+- `tools` — `pytest -q` (assembler, generator, simulator, host encoders, and the oracle-level firmware tests and reference-model tests of `tests/test_fw_*.py`; 140 tests, pyyaml 6.0.3 / pytest 8.4.2 pinned), `tools/gen_isa.py --check` (the three generated files match `isa/isa.yaml`), and all five SymbiYosys tasks of `formal/core.sby` on OSS CAD Suite release 2026-09-15.
 - `gds` — hardening with LibreLane via `tt-gds-action@ihp-cmos5l`, then a metrics gate (`test/check_metrics.py` on `runs/wokwi/final/metrics.json`: worst setup slack in the slow and typical corners, worst hold slack, route DRC errors, antenna-violating nets and LVS errors must be within limits; the Tiny Tapeout flow itself goes green on negative slack), the Tiny Tapeout precheck, the gate-level run of `test/Makefile` (`GATES=yes`, host suite only) against the routed netlist, and the GDS viewer. The gate is its own job (`metrics_gate`, needs `gds`, reads the `GDS_logs` artifact), so a failing gate does not skip the precheck, the gate-level run or the viewer; those jobs need only the `gds` job to pass.
 - `docs` — the datasheet build from `docs/info.md`.
 

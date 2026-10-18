@@ -116,6 +116,7 @@ Each protocol's firmware passes its cases on the oracle and the RTL, and the sui
 
 ### Minor findings logged during task reviews (triaged in the whole-branch review)
 
+- **Plan C (`protocol-fw`), final re-review minors deferred (2026-10-18):** `TRISE` 53 tolerates a 52-cycle release-to-high rise (1.04 us); the standard's 1 us tr is a 30 %-70 % figure, so a bus exactly at the limit may be flagged STRETCHED with legal timing -- `TRISE 72` would cover it (re-measure the I2C figures if changed); run `read2` and `write_restart_read` at `rise_cycles` 50 too; `ORACLE_RUNS` ids say `rise0` for the cases that run at 50 and 3; the `case_errors` STRETCHED line is redundant with the exact-word check; no stretch test sits near the 53-tick boundary; the info.md "at most 550" period wording excludes the repeated-START case (779 rise to rise).
 - **Plan C (`protocol-fw`), final-review minors deferred** (fixed in `15b1406` and the documentation commit: the `DELAY 3` margin, now the `TRISE` wait; the late-sampler wording; R4's low byte at `nostart`; host-misuse note; CI result-file checks; the SPI `HALF 26` note):
   - `HOST_PUSH_CYCLES` duplicated in the two cocotb modules (`test/test_spi_fw.py`, `test/test_i2c_fw.py`), and the exact-H edge check in both SPI harnesses.
   - I2C: bit-level stretching untested (the model stretches once, after an ACK bit); START/STOP decoded only between bytes; `case_errors` reads `ks[0]` unguarded; mutant B's kill relies on `T_SLAVE = 0`.

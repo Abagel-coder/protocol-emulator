@@ -10,7 +10,8 @@
 .equ PRESCALE 0       ; one tick = one cycle
 .equ Q        128     ; quarter of the SCL period in ticks = ceil(50e6 / 100e3 / 4) + 3 (measured period 10.46 us, under 100 kHz)
 .equ TRISE    53      ; ticks a released SCL may take to read back high before it counts as a stretch =
-                      ; ceil(1000 ns * 50 MHz) = 50 (UM10204 standard-mode rise time tr max) + 3 (output
+                      ; ceil(1000 ns * 50 MHz) = 50 (UM10204 standard-mode tr max, a 30 %-70 % figure; a released line
+                      ; must read back high within 52 cycles = 1.04 us, TRISE 72 would cover the strict reading) + 3 (output
                       ; register and the two-flop input synchroniser)
 main:
   WAITF RXV, R0

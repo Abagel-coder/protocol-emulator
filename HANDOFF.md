@@ -1,10 +1,10 @@
 # Handoff — protocol-emulator ASIC (Jane Street / Tiny Tapeout CMOS5L)
 
-Written 2026-09-18, updated 2026-10-17 after the first green hardening of the SRAM-macro design. **`main` holds core v0 and core v0.1 (merged 2026-10-15, `ac0e555`). The SRAM instruction memory is on branch `sram-imem`: complete, reviewed, and hardened green in CI (`gds` run 39014059324 on `4badf9e`: slow-corner setup +1.91 ns at 50 MHz, precheck and gl_test green). The branch is NOT merged; the merge, the Pages re-enable and the release label are the owner's decisions; do not merge without the owner's say-so.**
+Written 2026-09-18, updated 2026-10-17 after the first green hardening of the SRAM-macro design. **`main` holds core v0 and core v0.1 (merged 2026-10-15, `ac0e555`). The SRAM instruction memory is on branch `sram-imem`: complete, reviewed, and hardened green in CI (`gds` run 39014059324 on `4badf9e`: slow-corner setup +1.91 ns at 50 MHz, precheck and gl_test green). **Merged into `main` on 2026-10-17** (fast-forward to `658d152`, after the confirmation run 39022021518 on that head came back green on `gds`, `metrics_gate`, `precheck` and `gl_test`). Still open for the owner: re-enable GitHub Pages and the release label.**
 
 ## Paste this into the new session
 
-> Continue the protocol-emulator ASIC project in this folder. Read `HANDOFF.md` first, then `PLAN.md`. Branch `sram-imem` (512 x 16 SRAM instruction memory) is reviewed and hardened green (run 39014059324, slow-corner setup +1.91 ns at 50 MHz, precheck and gl_test green). Check "What is left" for the open owner items (merge of `sram-imem`, re-enable GitHub Pages, release label), ask which have been answered, then apply the answers. Plan C (required protocols) is being worked in a separate session on branch `claude/agitated-hamilton-5fbcad` (not merged); check with the owner before starting it again here. Run at most two agents, only one of them committing, tell each to do the work itself in the foreground, and free memory on this Mac first (see "Environment").
+> Continue the protocol-emulator ASIC project in this folder. Read `HANDOFF.md` first, then `PLAN.md`. Branch `sram-imem` (512 x 16 SRAM instruction memory) is reviewed and hardened green (run 39014059324, slow-corner setup +1.91 ns at 50 MHz, precheck and gl_test green). `sram-imem` is merged into `main` (658d152, 2026-10-17). Check "What is left" for the open owner items (re-enable GitHub Pages, release label), ask which have been answered, then apply the answers. Plan C (required protocols) is being worked in a separate session on branch `claude/agitated-hamilton-5fbcad` (not merged); check with the owner before starting it again here. Run at most two agents, only one of them committing, tell each to do the work itself in the foreground, and free memory on this Mac first (see "Environment").
 
 ## Where everything is
 
@@ -110,7 +110,7 @@ The fix between the runs was `10a9583` (adopt Loom's pdngen wrapper in `src/pdn_
 ## What is left (in order)
 
 1. **Owner items** (the code documents the current choice):
-   1. **Merge of `sram-imem`** into `main` (green run 39014059324; the timing decision is done: the 50 MHz clock is kept). Not merged until the owner says so.
+   1. ~~Merge of `sram-imem`~~ **Done 2026-10-17**: fast-forward merge into `main` (`658d152`) after the owner's go-ahead and the green confirmation run 39022021518 (`gds`, `metrics_gate`, `precheck`, `gl_test`; `viewer` fails until Pages is re-enabled).
    2. **Re-enable GitHub Pages** (`gh api repos/Abagel-coder/protocol-emulator/pages` returns 404 since the repository went public on 2026-10-16); the `gds` workflow's `viewer` job fails until then.
    3. **Release label.** `src/project.v` calls the SRAM build "core v1", which collides with "spec v1"; the README row says "core v1.0", provisionally. The owner names the release.
    (Settled: the artifact quota, by making the repository public on 2026-10-16; the timing decision, by the green run at 50 MHz.)
@@ -178,7 +178,7 @@ cd formal && sby -f core.sby       # all five tasks
 2. **Protocol firmware + reference models (plan C, required by the Nov 8 freeze: do this first)**: UART RX, SPI master/slave, I2C master/slave, then USB low speed and 10BASE-T.
 3. **Verification depth**: MCY mutation score, EQY RTL-vs-netlist equivalence, cocotb-coverage crosses, microcotb replay on the FPGA board, measured AI-assisted property drafting.
 4. **Generate field-slice macros** into `src/isa_defs.vh` (e.g. `ISA_BPIN_LEVEL_MSB/LSB`) and use them in `pe_core.v`, so `gen_isa.py --check` really pins the layout (today only the fuzzer does); also generate the class-count sentence in `docs/info.md`.
-5. **Owner items carried over:** merge of `sram-imem`, re-enable Pages, the release label (under "What is left"). (Decided 2026-10-01, branch `core-v0.1`: the wrap-safe `WAITT` deadline compare per spec §6, with the `t_in + tmo` adder moved off the `adv` critical path; the UART timing reference moved from `src/` to `test/uart_tx_ref.v`. Decided 2026-10-15: `core-v0` and `core-v0.1` merged into `main`.)
+5. **Owner items carried over:** re-enable Pages, the release label (the merge of `sram-imem` was done 2026-10-17) (under "What is left"). (Decided 2026-10-01, branch `core-v0.1`: the wrap-safe `WAITT` deadline compare per spec §6, with the `t_in + tmo` adder moved off the `adv` critical path; the UART timing reference moved from `src/` to `test/uart_tx_ref.v`. Decided 2026-10-15: `core-v0` and `core-v0.1` merged into `main`.)
 
 The README-as-evidence-ledger plan (plan A) and plan C are scheduled in `PLAN.md` section 3.
 

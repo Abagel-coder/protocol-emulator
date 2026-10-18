@@ -2,7 +2,7 @@
 ; {frame_error[8], data[7:0]} through the core->host FIFO (PUSH; dropped if the host lets it fill).
 ; The start bit is found with level waits (line high, then line low), not an edge wait, so a start
 ; bit that lands while a timed-out wait rearms is still seen.
-; Computed for a 50 MHz clock. All timing lives in the .equ block below (one edit for 40 MHz).
+; Computed for a 50 MHz clock. All timing lives in the .equ block below (retargeting the clock: see docs/info.md, "Protocol firmware").
 .equ PRESCALE 1       ; WRITE_PRESCALE value the constants assume: one tick = PRESCALE+1 = 2 cycles
 .equ BIT      217     ; ticks per bit  = 50e6 / 115200 / 2 = 217.0
 .equ HALF     108     ; ticks to the middle of the start bit: BIT / 2 = 108.5 truncated; the ~2-cycle edge-detection latency recentres the sample
